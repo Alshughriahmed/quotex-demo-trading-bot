@@ -1,8 +1,6 @@
 import argparse
 import asyncio
-import os
 import sys
-from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -13,44 +11,13 @@ from aiogram.types import CallbackQuery, Message
 
 import database
 import menu
+from config import ConfigError, load_config, startup_summary
 from states import INPUTS, INPUTS_BY_STATE, AdminInput
 from trading.trader import TradingRunner
 
 
-ENV_PATH = Path(".env")
 CONFIG = {}
 router = Router()
-
-
-def load_env(path: Path = ENV_PATH) -> dict:
-    values = {}
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip().strip('"').strip("'")
-    return {**values, **os.environ}
-
-
-def parse_list(raw: str) -> list[str]:
-    return [item.strip() for item in (raw or "").split(",") if item.strip()]
-
-
-def config_from_env(env: dict) -> dict:
-    token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
-    db_path = env.get("DATABASE_PATH", "data.db").strip() or "data.db"
-    admin_ids = parse_list(env.get("ADMIN_TELEGRAM_IDS", ""))
-    signals_chat_id = env.get("SIGNALS_CHAT_ID", "").strip()
-    if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is missing in .env")
-    return {
-        "token": token,
-        "db_path": db_path,
-        "admin_ids": admin_ids,
-        "signals_chat_id": signals_chat_id,
-    }
 
 
 def is_admin(user_id) -> bool:
@@ -395,10 +362,14 @@ async def async_main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--init-db", action="store_true", help="Create data.db and seed defaults")
     parser.add_argument("--check", action="store_true", help="Check Telegram token")
+    parser.add_argument("--check-config", action="store_true", help="Validate local configuration without starting the bot")
     args = parser.parse_args()
 
-    config = config_from_env(load_env())
+    require_token = not args.init_db
+    app_config = load_config(require_token=require_token)
+    config = app_config.as_dict()
     CONFIG.update(config)
+
     database.init_db(
         config["db_path"],
         admin_ids=config["admin_ids"],
@@ -407,6 +378,11 @@ async def async_main() -> None:
 
     if args.init_db:
         print(f"Database ready: {config['db_path']}")
+        print(startup_summary(app_config))
+        return
+
+    if args.check_config:
+        print(startup_summary(app_config))
         return
 
     if args.check:
@@ -414,10 +390,12 @@ async def async_main() -> None:
         try:
             me = await bot.get_me()
             print(f"Connected to Telegram bot: @{me.username} (id={me.id})")
+            print(startup_summary(app_config))
         finally:
             await bot.session.close()
         return
 
+    print(startup_summary(app_config))
     await run_bot(config)
 
 
@@ -426,6 +404,10 @@ if __name__ == "__main__":
         asyncio.run(async_main())
     except KeyboardInterrupt:
         print("Bot stopped.")
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        print("Create bot/.env from .env.example and fill your local private values.", file=sys.stderr)
+        raise SystemExit(2) from exc
     except Exception as exc:
         print(f"Fatal error: {exc}", file=sys.stderr)
         raise
