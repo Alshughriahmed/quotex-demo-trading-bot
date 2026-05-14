@@ -34,6 +34,10 @@ class PortfolioRow:
     closed_trades: int
     win_rate_excluding_draws: float
     win_rate_including_draws: float
+    loss_rate: float
+    max_consecutive_losses: int
+    max_drawdown_units: int
+    final_equity_units: int
     average_score: float
     worst_file_score: float
     consistency_score: float
@@ -72,6 +76,7 @@ def aggregate_rows(rows_by_combo: dict[tuple[int, int, bool, int, int, int], lis
         total_signals = sum(row.total_signals for row in rows)
         closed_trades = sum(row.closed_trades for row in rows)
         win_rate = (wins / closed_trades * 100) if closed_trades else 0.0
+        loss_rate = (losses / closed_trades * 100) if closed_trades else 0.0
         total_with_draws = wins + losses + draws
         win_rate_with_draws = (wins / total_with_draws * 100) if total_with_draws else 0.0
         scores = [row.score for row in rows]
@@ -99,6 +104,10 @@ def aggregate_rows(rows_by_combo: dict[tuple[int, int, bool, int, int, int], lis
                 closed_trades=closed_trades,
                 win_rate_excluding_draws=round(win_rate, 4),
                 win_rate_including_draws=round(win_rate_with_draws, 4),
+                loss_rate=round(loss_rate, 4),
+                max_consecutive_losses=max((row.max_consecutive_losses for row in rows), default=0),
+                max_drawdown_units=max((row.max_drawdown_units for row in rows), default=0),
+                final_equity_units=sum(row.final_equity_units for row in rows),
                 average_score=round(average_score, 4),
                 worst_file_score=round(worst_score, 4),
                 consistency_score=consistency_score,
@@ -109,6 +118,9 @@ def aggregate_rows(rows_by_combo: dict[tuple[int, int, bool, int, int, int], lis
             row.consistency_score,
             row.worst_file_score,
             row.win_rate_excluding_draws,
+            row.final_equity_units,
+            -row.max_drawdown_units,
+            -row.max_consecutive_losses,
             row.closed_trades,
             -row.losses,
         ),
@@ -153,7 +165,7 @@ def print_table(rows: list[PortfolioRow], limit: int) -> None:
     if not rows:
         print("No valid combinations were tested.")
         return
-    header = "rank | duration | candle_s | horizon | min_conf | lookback | files | trades | wins | losses | win_rate | avg_score | worst | consistency"
+    header = "rank | duration | candle_s | horizon | min_conf | lookback | files | trades | wins | losses | win_rate | max_loss_streak | max_dd | consistency"
     print(header)
     print("-" * len(header))
     for row in rows[:limit]:
@@ -169,8 +181,8 @@ def print_table(rows: list[PortfolioRow], limit: int) -> None:
             f"{row.wins:>4} | "
             f"{row.losses:>6} | "
             f"{row.win_rate_excluding_draws:>8.2f}% | "
-            f"{row.average_score:>9.2f} | "
-            f"{row.worst_file_score:>5.2f} | "
+            f"{row.max_consecutive_losses:>15} | "
+            f"{row.max_drawdown_units:>6} | "
             f"{row.consistency_score:>11.2f}"
         )
 
