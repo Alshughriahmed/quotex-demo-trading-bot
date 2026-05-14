@@ -322,9 +322,8 @@ def score_signal(
         score += 3
         reasons.append("ضغط صعود")
     if direction == PUT and closes[-1] < closes[-2] < closes[-3]:
-        score -= 4
+        score += 3
         pressure_down = True
-        cap = min(cap, 88)
         reasons.append("ضغط هبوط")
 
     if not has_confirmation:
