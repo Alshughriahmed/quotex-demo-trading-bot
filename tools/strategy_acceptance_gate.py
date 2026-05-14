@@ -35,8 +35,14 @@ def evaluate(row: dict[str, Any], args: argparse.Namespace) -> list[GateRule]:
     worst_file_score = float(row.get("worst_file_score", 0) or 0)
     consistency_score = float(row.get("consistency_score", 0) or 0)
     losses = int(row.get("losses", 0) or 0)
-    max_loss_rate = float(args.max_loss_rate)
-    loss_rate = (losses / closed_trades * 100) if closed_trades else 100.0
+    loss_rate = float(row.get("loss_rate", 0) or 0)
+    if loss_rate <= 0 and closed_trades:
+        loss_rate = losses / closed_trades * 100
+    if not closed_trades:
+        loss_rate = 100.0
+    max_consecutive_losses = int(row.get("max_consecutive_losses", 0) or 0)
+    max_drawdown_units = int(row.get("max_drawdown_units", 0) or 0)
+    final_equity_units = int(row.get("final_equity_units", 0) or 0)
 
     return [
         GateRule(
@@ -66,8 +72,23 @@ def evaluate(row: dict[str, Any], args: argparse.Namespace) -> list[GateRule]:
         ),
         GateRule(
             "maximum loss rate",
-            loss_rate <= max_loss_rate,
-            f"loss_rate={loss_rate:.2f}%, required<={max_loss_rate:.2f}%",
+            loss_rate <= args.max_loss_rate,
+            f"loss_rate={loss_rate:.2f}%, required<={args.max_loss_rate:.2f}%",
+        ),
+        GateRule(
+            "maximum consecutive losses",
+            max_consecutive_losses <= args.max_consecutive_losses,
+            f"max_consecutive_losses={max_consecutive_losses}, required<={args.max_consecutive_losses}",
+        ),
+        GateRule(
+            "maximum drawdown units",
+            max_drawdown_units <= args.max_drawdown_units,
+            f"max_drawdown_units={max_drawdown_units}, required<={args.max_drawdown_units}",
+        ),
+        GateRule(
+            "minimum final equity units",
+            final_equity_units >= args.min_final_equity_units,
+            f"final_equity_units={final_equity_units}, required>={args.min_final_equity_units}",
         ),
     ]
 
@@ -80,9 +101,18 @@ def print_gate_report(row: dict[str, Any], rules: list[GateRule]) -> None:
     print("")
     print("Candidate:")
     print(f"  duration_seconds: {row.get('duration_seconds')}")
+    print(f"  candle_seconds: {row.get('candle_seconds')}")
+    print(f"  horizon_candles: {row.get('horizon_candles')}")
+    print(f"  drop_open_candle: {row.get('drop_open_candle')}")
     print(f"  min_confidence: {row.get('min_confidence')}")
     print(f"  lookback: {row.get('lookback')}")
     print(f"  step: {row.get('step')}")
+    print("")
+    print("Risk metrics:")
+    print(f"  loss_rate: {row.get('loss_rate')}")
+    print(f"  max_consecutive_losses: {row.get('max_consecutive_losses')}")
+    print(f"  max_drawdown_units: {row.get('max_drawdown_units')}")
+    print(f"  final_equity_units: {row.get('final_equity_units')}")
     print("")
     print("Rules:")
     for rule in rules:
@@ -101,6 +131,9 @@ def main() -> int:
     parser.add_argument("--min-worst-file-score", type=float, default=1.0)
     parser.add_argument("--min-consistency-score", type=float, default=35.0)
     parser.add_argument("--max-loss-rate", type=float, default=45.0)
+    parser.add_argument("--max-consecutive-losses", type=int, default=5)
+    parser.add_argument("--max-drawdown-units", type=int, default=8)
+    parser.add_argument("--min-final-equity-units", type=int, default=1)
     args = parser.parse_args()
 
     data = load_report(args.path)
