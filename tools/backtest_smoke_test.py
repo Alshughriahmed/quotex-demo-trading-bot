@@ -79,6 +79,10 @@ def main() -> int:
             "Losses:",
             "No-trade windows:",
             "Win rate excluding draws:",
+            "Loss rate:",
+            "Max consecutive losses:",
+            "Max drawdown units:",
+            "Final equity units:",
             "JSON report written:",
             "CSV trades written:",
         ]
@@ -104,10 +108,20 @@ def main() -> int:
             actual_value = report["settings"].get(key)
             if actual_value != expected_value:
                 raise AssertionError(f"Expected settings[{key!r}]={expected_value!r}, got {actual_value!r}")
-        if "total_signals" not in report["summary"]:
-            raise AssertionError("JSON summary missing total_signals")
-        if "outcome" not in csv_report.read_text(encoding="utf-8").splitlines()[0]:
-            raise AssertionError("CSV report header missing outcome")
+        expected_summary_keys = [
+            "total_signals",
+            "loss_rate",
+            "max_consecutive_losses",
+            "max_drawdown_units",
+            "final_equity_units",
+        ]
+        for key in expected_summary_keys:
+            if key not in report["summary"]:
+                raise AssertionError(f"JSON summary missing {key}")
+        csv_header = csv_report.read_text(encoding="utf-8").splitlines()[0]
+        for key in ("outcome", "equity_after_trade", "drawdown_after_trade"):
+            if key not in csv_header:
+                raise AssertionError(f"CSV report header missing {key}")
 
     print("Backtest smoke test passed.")
     print(output)

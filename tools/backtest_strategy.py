@@ -22,6 +22,11 @@ class BacktestResult:
     losses: int = 0
     draws: int = 0
     no_trade_windows: int = 0
+    current_loss_streak: int = 0
+    max_consecutive_losses: int = 0
+    equity_units: int = 0
+    peak_equity_units: int = 0
+    max_drawdown_units: int = 0
 
     @property
     def win_rate(self) -> float:
@@ -41,6 +46,28 @@ class BacktestResult:
     def closed_trades(self) -> int:
         return self.wins + self.losses
 
+    @property
+    def loss_rate(self) -> float:
+        if self.closed_trades == 0:
+            return 0.0
+        return (self.losses / self.closed_trades) * 100
+
+    def record_outcome(self, outcome: str) -> None:
+        if outcome == "WIN":
+            self.wins += 1
+            self.current_loss_streak = 0
+            self.equity_units += 1
+        elif outcome == "LOSS":
+            self.losses += 1
+            self.current_loss_streak += 1
+            self.max_consecutive_losses = max(self.max_consecutive_losses, self.current_loss_streak)
+            self.equity_units -= 1
+        else:
+            self.draws += 1
+
+        self.peak_equity_units = max(self.peak_equity_units, self.equity_units)
+        self.max_drawdown_units = max(self.max_drawdown_units, self.peak_equity_units - self.equity_units)
+
     def to_summary_dict(self) -> dict[str, int | float]:
         return {
             "total_signals": self.total_signals,
@@ -51,6 +78,10 @@ class BacktestResult:
             "closed_trades": self.closed_trades,
             "win_rate_excluding_draws": round(self.win_rate, 4),
             "win_rate_including_draws": round(self.accuracy_with_draws, 4),
+            "loss_rate": round(self.loss_rate, 4),
+            "max_consecutive_losses": self.max_consecutive_losses,
+            "max_drawdown_units": self.max_drawdown_units,
+            "final_equity_units": self.equity_units,
         }
 
 
@@ -64,6 +95,8 @@ class BacktestTrade:
     entry_price: float
     exit_price: float
     outcome: str
+    equity_after_trade: int
+    drawdown_after_trade: int
 
 
 def load_candles(path: Path) -> list[dict[str, Any]]:
@@ -146,12 +179,7 @@ def run_backtest(
         exit_price = float(candles[index + horizon]["close"])
         outcome = decide_outcome(decision.direction, entry_price, exit_price)
         result.total_signals += 1
-        if outcome == "WIN":
-            result.wins += 1
-        elif outcome == "LOSS":
-            result.losses += 1
-        else:
-            result.draws += 1
+        result.record_outcome(outcome)
         trades.append(
             BacktestTrade(
                 index=index,
@@ -162,6 +190,8 @@ def run_backtest(
                 entry_price=entry_price,
                 exit_price=exit_price,
                 outcome=outcome,
+                equity_after_trade=result.equity_units,
+                drawdown_after_trade=result.peak_equity_units - result.equity_units,
             )
         )
         last_entry_index = index
@@ -191,6 +221,10 @@ def print_report(result: BacktestResult) -> None:
     print(f"Closed trades: {result.closed_trades}")
     print(f"Win rate excluding draws: {result.win_rate:.2f}%")
     print(f"Win rate including draws: {result.accuracy_with_draws:.2f}%")
+    print(f"Loss rate: {result.loss_rate:.2f}%")
+    print(f"Max consecutive losses: {result.max_consecutive_losses}")
+    print(f"Max drawdown units: {result.max_drawdown_units}")
+    print(f"Final equity units: {result.equity_units}")
 
 
 def write_json_report(path: Path, result: BacktestResult, trades: list[BacktestTrade], settings: dict[str, Any]) -> None:
@@ -212,6 +246,8 @@ def write_csv_report(path: Path, trades: list[BacktestTrade]) -> None:
         "entry_price",
         "exit_price",
         "outcome",
+        "equity_after_trade",
+        "drawdown_after_trade",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
