@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 import database
 import menu
 from config import ConfigError, load_config, startup_summary
+from demo_guardrails import DEMO_ONLY_NOTICE, enforce_demo_only
 from states import INPUTS, INPUTS_BY_STATE, AdminInput
 from trading.trader import TradingRunner
 
@@ -244,7 +245,7 @@ async def save_quotex_email_input(message: Message, state: FSMContext, input_con
         await message.answer("اكتب إيميل صالح.")
         return
 
-    database.upsert_quotex_account(CONFIG["db_path"], email=email, enabled=True)
+    database.upsert_quotex_account(CONFIG["db_path"], email=email, account_type="DEMO", enabled=True)
     await state.clear()
     rendered = menu.render_menu(CONFIG["db_path"], input_config["return_menu"])
     await message.answer(f"{input_config['saved_text']}\n\nالإيميل: {email}", reply_markup=rendered["reply_markup"])
@@ -256,7 +257,7 @@ async def save_quotex_password_input(message: Message, state: FSMContext, input_
         await message.answer("كلمة السر قصيرة جدًا.")
         return
 
-    database.upsert_quotex_account(CONFIG["db_path"], password=password, enabled=True)
+    database.upsert_quotex_account(CONFIG["db_path"], password=password, account_type="DEMO", enabled=True)
     await state.clear()
     rendered = menu.render_menu(CONFIG["db_path"], input_config["return_menu"])
     await message.answer(input_config["saved_text"], reply_markup=rendered["reply_markup"])
@@ -375,13 +376,16 @@ async def async_main() -> None:
         admin_ids=config["admin_ids"],
         signals_chat_id=config["signals_chat_id"],
     )
+    enforce_demo_only(config["db_path"])
 
     if args.init_db:
         print(f"Database ready: {config['db_path']}")
+        print(DEMO_ONLY_NOTICE)
         print(startup_summary(app_config))
         return
 
     if args.check_config:
+        print(DEMO_ONLY_NOTICE)
         print(startup_summary(app_config))
         return
 
@@ -390,11 +394,13 @@ async def async_main() -> None:
         try:
             me = await bot.get_me()
             print(f"Connected to Telegram bot: @{me.username} (id={me.id})")
+            print(DEMO_ONLY_NOTICE)
             print(startup_summary(app_config))
         finally:
             await bot.session.close()
         return
 
+    print(DEMO_ONLY_NOTICE)
     print(startup_summary(app_config))
     await run_bot(config)
 
