@@ -17,7 +17,9 @@ def main() -> int:
             "settings": {
                 "files": ["eurusd.json", "gbpusd.json"],
                 "durations": [180],
-                "min_confidences": [70, 75],
+                "candle_seconds": 60,
+                "drop_open_candle": True,
+                "min_confidences": [70, 75, 80],
                 "lookbacks": [60, 90],
                 "steps": [3],
             },
@@ -25,6 +27,9 @@ def main() -> int:
                 {
                     "rank": 1,
                     "duration_seconds": 180,
+                    "candle_seconds": 60,
+                    "horizon_candles": 3,
+                    "drop_open_candle": True,
                     "min_confidence": 70,
                     "lookback": 90,
                     "step": 3,
@@ -37,6 +42,10 @@ def main() -> int:
                     "closed_trades": 40,
                     "win_rate_excluding_draws": 70.0,
                     "win_rate_including_draws": 70.0,
+                    "loss_rate": 30.0,
+                    "max_consecutive_losses": 3,
+                    "max_drawdown_units": 5,
+                    "final_equity_units": 16,
                     "average_score": 60.0,
                     "worst_file_score": 45.0,
                     "consistency_score": 55.5,
@@ -44,7 +53,36 @@ def main() -> int:
                 {
                     "rank": 2,
                     "duration_seconds": 180,
+                    "candle_seconds": 60,
+                    "horizon_candles": 3,
+                    "drop_open_candle": True,
                     "min_confidence": 75,
+                    "lookback": 60,
+                    "step": 3,
+                    "files_tested": 2,
+                    "total_signals": 40,
+                    "wins": 30,
+                    "losses": 10,
+                    "draws": 0,
+                    "no_trade_windows": 30,
+                    "closed_trades": 40,
+                    "win_rate_excluding_draws": 75.0,
+                    "win_rate_including_draws": 75.0,
+                    "loss_rate": 25.0,
+                    "max_consecutive_losses": 8,
+                    "max_drawdown_units": 12,
+                    "final_equity_units": 20,
+                    "average_score": 50.0,
+                    "worst_file_score": 25.0,
+                    "consistency_score": 45.0,
+                },
+                {
+                    "rank": 3,
+                    "duration_seconds": 180,
+                    "candle_seconds": 60,
+                    "horizon_candles": 3,
+                    "drop_open_candle": True,
+                    "min_confidence": 80,
                     "lookback": 60,
                     "step": 3,
                     "files_tested": 2,
@@ -56,6 +94,10 @@ def main() -> int:
                     "closed_trades": 15,
                     "win_rate_excluding_draws": 53.3333,
                     "win_rate_including_draws": 53.3333,
+                    "loss_rate": 46.6667,
+                    "max_consecutive_losses": 4,
+                    "max_drawdown_units": 6,
+                    "final_equity_units": 1,
                     "average_score": 20.0,
                     "worst_file_score": -5.0,
                     "consistency_score": 12.5,
@@ -70,7 +112,7 @@ def main() -> int:
                 str(root / "tools" / "strategy_lab.py"),
                 str(sweep_path),
                 "--top",
-                "2",
+                "3",
                 "--markdown-out",
                 str(report_path),
             ],
@@ -87,8 +129,13 @@ def main() -> int:
         output = completed.stdout
         required = [
             "# Strategy Lab Report",
+            "Candle seconds",
             "Top candidates",
             "PROMISING",
+            "RISKY",
+            "Max loss streak",
+            "Max DD",
+            "drawdown too high",
             "Recommended next action",
             "Markdown strategy lab report written:",
         ]
@@ -97,8 +144,10 @@ def main() -> int:
             raise AssertionError(f"Strategy lab output missing expected fields: {missing}\n{output}")
         if not report_path.exists():
             raise AssertionError("Strategy lab markdown report was not created")
-        if "Safety note" not in report_path.read_text(encoding="utf-8"):
-            raise AssertionError("Strategy lab report missing safety note")
+        report = report_path.read_text(encoding="utf-8")
+        for item in ("Safety note", "Loss rate", "Final equity", "This project remains DEMO-only"):
+            if item not in report:
+                raise AssertionError(f"Strategy lab report missing {item!r}")
 
     print("Strategy lab smoke test passed.")
     print(output)
