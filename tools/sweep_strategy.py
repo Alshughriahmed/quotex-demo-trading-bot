@@ -34,15 +34,28 @@ class SweepRow:
     closed_trades: int
     win_rate_excluding_draws: float
     win_rate_including_draws: float
+    loss_rate: float
+    max_consecutive_losses: int
+    max_drawdown_units: int
+    final_equity_units: int
     score: float
 
 
-def score_result(closed_trades: int, win_rate: float, losses: int, no_trade_windows: int) -> float:
+def score_result(
+    closed_trades: int,
+    win_rate: float,
+    losses: int,
+    no_trade_windows: int,
+    max_consecutive_losses: int = 0,
+    max_drawdown_units: int = 0,
+) -> float:
     """Rank settings for engineering comparison, not profit prediction."""
     trade_factor = min(1.0, closed_trades / 30) if closed_trades else 0.0
     loss_penalty = min(20.0, losses * 0.35)
     silence_penalty = min(10.0, no_trade_windows * 0.02)
-    return round((win_rate * trade_factor) - loss_penalty - silence_penalty, 4)
+    streak_penalty = min(12.0, max_consecutive_losses * 1.5)
+    drawdown_penalty = min(12.0, max_drawdown_units * 0.9)
+    return round((win_rate * trade_factor) - loss_penalty - silence_penalty - streak_penalty - drawdown_penalty, 4)
 
 
 def run_sweep(
@@ -89,11 +102,17 @@ def run_sweep(
                 closed_trades=result.closed_trades,
                 win_rate_excluding_draws=round(result.win_rate, 4),
                 win_rate_including_draws=round(result.accuracy_with_draws, 4),
+                loss_rate=round(result.loss_rate, 4),
+                max_consecutive_losses=result.max_consecutive_losses,
+                max_drawdown_units=result.max_drawdown_units,
+                final_equity_units=result.equity_units,
                 score=score_result(
                     result.closed_trades,
                     result.win_rate,
                     result.losses,
                     result.no_trade_windows,
+                    result.max_consecutive_losses,
+                    result.max_drawdown_units,
                 ),
             )
         )
@@ -101,6 +120,9 @@ def run_sweep(
         key=lambda row: (
             row.score,
             row.win_rate_excluding_draws,
+            row.final_equity_units,
+            -row.max_drawdown_units,
+            -row.max_consecutive_losses,
             row.closed_trades,
             -row.losses,
         ),
@@ -118,7 +140,7 @@ def print_table(rows: list[SweepRow], limit: int) -> None:
         print("No valid combinations were tested.")
         return
 
-    header = "rank | duration | candle_s | horizon | min_conf | lookback | step | trades | wins | losses | win_rate | score"
+    header = "rank | duration | candle_s | horizon | min_conf | lookback | step | trades | wins | losses | win_rate | max_loss_streak | max_dd | score"
     print(header)
     print("-" * len(header))
     for row in rows[:limit]:
@@ -134,6 +156,8 @@ def print_table(rows: list[SweepRow], limit: int) -> None:
             f"{row.wins:>4} | "
             f"{row.losses:>6} | "
             f"{row.win_rate_excluding_draws:>8.2f}% | "
+            f"{row.max_consecutive_losses:>15} | "
+            f"{row.max_drawdown_units:>6} | "
             f"{row.score:>6.2f}"
         )
 
