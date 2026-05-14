@@ -12,7 +12,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from backtest_strategy import load_candles, run_backtest  # noqa: E402
+from backtest_strategy import calculate_horizon, load_candles, run_backtest  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -20,6 +20,9 @@ class SweepRow:
     rank: int
     asset: str
     duration_seconds: int
+    candle_seconds: int
+    horizon_candles: int
+    drop_open_candle: bool
     min_confidence: int
     lookback: int
     step: int
@@ -49,10 +52,12 @@ def run_sweep(
     min_confidences: list[int],
     lookbacks: list[int],
     steps: list[int],
+    candle_seconds: int = 60,
+    drop_open_candle: bool = True,
 ) -> list[SweepRow]:
     rows: list[SweepRow] = []
     for duration, min_confidence, lookback, step in product(durations, min_confidences, lookbacks, steps):
-        horizon = max(1, duration // 60)
+        horizon = calculate_horizon(duration, candle_seconds)
         if len(candles) < lookback + horizon + 1:
             continue
         result, _trades = run_backtest(
@@ -62,12 +67,17 @@ def run_sweep(
             min_confidence=min_confidence,
             lookback=lookback,
             step=step,
+            candle_seconds=candle_seconds,
+            drop_open_candle=drop_open_candle,
         )
         rows.append(
             SweepRow(
                 rank=0,
                 asset=asset,
                 duration_seconds=duration,
+                candle_seconds=candle_seconds,
+                horizon_candles=horizon,
+                drop_open_candle=drop_open_candle,
                 min_confidence=min_confidence,
                 lookback=lookback,
                 step=step,
@@ -108,13 +118,15 @@ def print_table(rows: list[SweepRow], limit: int) -> None:
         print("No valid combinations were tested.")
         return
 
-    header = "rank | duration | min_conf | lookback | step | trades | wins | losses | win_rate | score"
+    header = "rank | duration | candle_s | horizon | min_conf | lookback | step | trades | wins | losses | win_rate | score"
     print(header)
     print("-" * len(header))
     for row in rows[:limit]:
         print(
             f"{row.rank:>4} | "
             f"{row.duration_seconds:>8} | "
+            f"{row.candle_seconds:>8} | "
+            f"{row.horizon_candles:>7} | "
             f"{row.min_confidence:>8} | "
             f"{row.lookback:>8} | "
             f"{row.step:>4} | "
@@ -154,10 +166,16 @@ def main() -> int:
     parser.add_argument("path", type=Path, help="Path to candles .json or .csv")
     parser.add_argument("--asset", default="SWEEP/ASSET")
     parser.add_argument("--durations", nargs="+", default=["180"], help="Trade durations in seconds")
+    parser.add_argument("--candle-seconds", type=int, default=60, help="Seconds represented by each candle")
     parser.add_argument("--min-confidences", nargs="+", default=["70", "75", "80"])
     parser.add_argument("--lookbacks", nargs="+", default=["60", "90", "120"])
     parser.add_argument("--steps", nargs="+", default=["1"])
     parser.add_argument("--top", type=int, default=10, help="How many rows to print")
+    parser.add_argument(
+        "--keep-open-candle",
+        action="store_true",
+        help="Keep the latest candle in strategy windows. Default drops it to match live strategy behavior.",
+    )
     parser.add_argument("--csv-out", type=Path, help="Optional CSV output path")
     parser.add_argument("--json-out", type=Path, help="Optional JSON output path")
     args = parser.parse_args()
@@ -167,6 +185,7 @@ def main() -> int:
     min_confidences = parse_ints(args.min_confidences)
     lookbacks = parse_ints(args.lookbacks)
     steps = parse_ints(args.steps)
+    drop_open_candle = not args.keep_open_candle
 
     rows = run_sweep(
         candles=candles,
@@ -175,6 +194,8 @@ def main() -> int:
         min_confidences=min_confidences,
         lookbacks=lookbacks,
         steps=steps,
+        candle_seconds=args.candle_seconds,
+        drop_open_candle=drop_open_candle,
     )
     print_table(rows, limit=args.top)
 
@@ -182,6 +203,8 @@ def main() -> int:
         "source": str(args.path),
         "asset": args.asset,
         "durations": durations,
+        "candle_seconds": args.candle_seconds,
+        "drop_open_candle": drop_open_candle,
         "min_confidences": min_confidences,
         "lookbacks": lookbacks,
         "steps": steps,
