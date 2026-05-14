@@ -22,5 +22,8 @@ jobs:
       - name: Compile Python files
         run: python -m compileall bot tools
 
+      - name: Run strategy smoke test
+        run: python tools/strategy_smoke_test.py
+
       - name: Run local safety check
         run: python tools/safety_check.py
