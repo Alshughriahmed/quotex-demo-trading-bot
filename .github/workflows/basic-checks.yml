@@ -37,5 +37,8 @@ jobs:
       - name: Run portfolio sweep smoke test
         run: python tools/sweep_portfolio_smoke_test.py
 
+      - name: Run strategy lab smoke test
+        run: python tools/strategy_lab_smoke_test.py
+
       - name: Run local safety check
         run: python tools/safety_check.py
