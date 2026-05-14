@@ -4,7 +4,7 @@ import argparse
 import csv
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,34 @@ class BacktestResult:
         if total == 0:
             return 0.0
         return (self.wins / total) * 100
+
+    @property
+    def closed_trades(self) -> int:
+        return self.wins + self.losses
+
+    def to_summary_dict(self) -> dict[str, int | float]:
+        return {
+            "total_signals": self.total_signals,
+            "wins": self.wins,
+            "losses": self.losses,
+            "draws": self.draws,
+            "no_trade_windows": self.no_trade_windows,
+            "closed_trades": self.closed_trades,
+            "win_rate_excluding_draws": round(self.win_rate, 4),
+            "win_rate_including_draws": round(self.accuracy_with_draws, 4),
+        }
+
+
+@dataclass(slots=True)
+class BacktestTrade:
+    index: int
+    asset: str
+    direction: str
+    confidence: int
+    reason: str
+    entry_price: float
+    exit_price: float
+    outcome: str
 
 
 def load_candles(path: Path) -> list[dict[str, Any]]:
@@ -72,7 +100,7 @@ def run_backtest(
     min_confidence: int,
     lookback: int,
     step: int,
-) -> BacktestResult:
+) -> tuple[BacktestResult, list[BacktestTrade]]:
     if step <= 0:
         raise ValueError("step must be greater than zero")
     if lookback <= 0:
@@ -80,6 +108,7 @@ def run_backtest(
 
     horizon = max(1, duration_seconds // 60)
     result = BacktestResult()
+    trades: list[BacktestTrade] = []
     index = lookback
     last_entry_index = -10_000
 
@@ -112,10 +141,22 @@ def run_backtest(
             result.losses += 1
         else:
             result.draws += 1
+        trades.append(
+            BacktestTrade(
+                index=index,
+                asset=asset,
+                direction=decision.direction,
+                confidence=decision.confidence,
+                reason=decision.reason,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                outcome=outcome,
+            )
+        )
         last_entry_index = index
         index += step
 
-    return result
+    return result, trades
 
 
 def decide_outcome(direction: str, entry_price: float, exit_price: float) -> str:
@@ -129,7 +170,6 @@ def decide_outcome(direction: str, entry_price: float, exit_price: float) -> str
 
 
 def print_report(result: BacktestResult) -> None:
-    closed = result.wins + result.losses
     print("Offline strategy backtest")
     print("=========================")
     print(f"Signals: {result.total_signals}")
@@ -137,9 +177,36 @@ def print_report(result: BacktestResult) -> None:
     print(f"Losses: {result.losses}")
     print(f"Draws: {result.draws}")
     print(f"No-trade windows: {result.no_trade_windows}")
-    print(f"Closed trades: {closed}")
+    print(f"Closed trades: {result.closed_trades}")
     print(f"Win rate excluding draws: {result.win_rate:.2f}%")
     print(f"Win rate including draws: {result.accuracy_with_draws:.2f}%")
+
+
+def write_json_report(path: Path, result: BacktestResult, trades: list[BacktestTrade], settings: dict[str, Any]) -> None:
+    payload = {
+        "settings": settings,
+        "summary": result.to_summary_dict(),
+        "trades": [asdict(trade) for trade in trades],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_csv_report(path: Path, trades: list[BacktestTrade]) -> None:
+    fieldnames = [
+        "index",
+        "asset",
+        "direction",
+        "confidence",
+        "reason",
+        "entry_price",
+        "exit_price",
+        "outcome",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for trade in trades:
+            writer.writerow(asdict(trade))
 
 
 def main() -> int:
@@ -150,13 +217,15 @@ def main() -> int:
     parser.add_argument("--min-confidence", type=int, default=75)
     parser.add_argument("--lookback", type=int, default=90, help="Number of candles per strategy window")
     parser.add_argument("--step", type=int, default=1, help="How many candles to move after each scan")
+    parser.add_argument("--json-out", type=Path, help="Optional path to write a JSON backtest report")
+    parser.add_argument("--csv-out", type=Path, help="Optional path to write a CSV trade list")
     args = parser.parse_args()
 
     candles = load_candles(args.path)
     if len(candles) < args.lookback + max(1, args.duration // 60) + 1:
         raise SystemExit("Not enough candles for this lookback and duration.")
 
-    result = run_backtest(
+    result, trades = run_backtest(
         candles=candles,
         asset=args.asset,
         duration_seconds=args.duration,
@@ -165,6 +234,22 @@ def main() -> int:
         step=args.step,
     )
     print_report(result)
+
+    settings = {
+        "source": str(args.path),
+        "asset": args.asset,
+        "duration_seconds": args.duration,
+        "min_confidence": args.min_confidence,
+        "lookback": args.lookback,
+        "step": args.step,
+        "candles": len(candles),
+    }
+    if args.json_out:
+        write_json_report(args.json_out, result, trades, settings)
+        print(f"JSON report written: {args.json_out}")
+    if args.csv_out:
+        write_csv_report(args.csv_out, trades)
+        print(f"CSV trades written: {args.csv_out}")
     return 0
 
 
