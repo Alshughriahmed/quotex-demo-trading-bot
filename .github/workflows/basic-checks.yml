@@ -31,5 +31,8 @@ jobs:
       - name: Run backtest comparison smoke test
         run: python tools/compare_backtests_smoke_test.py
 
+      - name: Run strategy sweep smoke test
+        run: python tools/sweep_strategy_smoke_test.py
+
       - name: Run local safety check
         run: python tools/safety_check.py
