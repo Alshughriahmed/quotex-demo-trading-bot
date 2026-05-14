@@ -1,0 +1,4 @@
+aiogram>=3.4,<4
+# Quotex integration used by bot/trading/quotex_client.py
+# Install from GitHub if you want real DEMO execution:
+git+https://github.com/cleitonleonel/pyquotex.git

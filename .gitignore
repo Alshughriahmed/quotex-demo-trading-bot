@@ -1,0 +1,30 @@
+# secrets
+.env
+*.env.local
+session.json
+.quotex/
+
+# databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# logs/runtime
+logs/
+*.log
+bot.log
+bot.pid
+backups/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# system/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
