@@ -7,7 +7,7 @@ import database
 
 DEMO_ONLY_NOTICE = (
     "DEMO-only safety guardrail is active. "
-    "REAL account selection is disabled in this development build."
+    "REAL account selection and live-money execution are disabled in this development build."
 )
 
 
@@ -15,8 +15,8 @@ def enforce_demo_only(db_path: str) -> None:
     """Force the bot into DEMO mode and hide confusing REAL UI actions.
 
     This project is still a development/testing bot. The trading runner already
-    refuses REAL execution, but the UI must not offer a REAL option because that
-    creates a false sense that live-money execution is supported.
+    refuses REAL execution, but the UI must not offer live-money controls because
+    that creates a false sense that REAL execution is supported.
     """
     database.set_setting(db_path, "account_type", "DEMO")
     with database.connect(db_path) as db:
@@ -32,6 +32,7 @@ def _disable_buttons(db: sqlite3.Connection) -> None:
         SET enabled = 0,
             updated_at = CURRENT_TIMESTAMP
         WHERE button_key IN (
+            'account_type_menu',
             'account_real'
         )
         """
