@@ -45,6 +45,17 @@ class TradeCandidate:
     pre_entry_price: float | None = None
 
 
+def audit_decision(event: str, **fields: Any) -> None:
+    """Write compact machine-readable decision audit entries to trader.log."""
+    details = " ".join(f"{key}={safe_log_value(value)}" for key, value in fields.items())
+    logger.info("AUDIT event=%s %s", event, details)
+
+
+def safe_log_value(value: Any) -> str:
+    text = str(value)
+    return text.replace("\n", " ").replace("\r", " ").replace(" ", "_")[:300]
+
+
 class TradingRunner:
     def __init__(self, bot: Bot, db_path: str):
         self.bot = bot
@@ -81,6 +92,7 @@ class TradingRunner:
 
         schedule = database.get_signal_schedule(self.db_path)
         if schedule["single_open_trade"] and database.get_active_trade(self.db_path):
+            audit_decision("blocked", reason="active_trade_exists")
             return
 
         now = datetime.now(timezone.utc)
@@ -89,31 +101,50 @@ class TradingRunner:
 
         risk_message = self.check_risk(settings)
         if risk_message:
+            audit_decision("blocked", reason="risk", risk=risk_message)
             logger.info("Risk blocked signal: %s", risk_message)
             return
 
         candidate = await self.find_best_candidate(settings)
         if not candidate or not candidate.decision.has_trade:
+            audit_decision("no_trade", reason="no_candidate_above_filters")
             return
 
         entry_time = next_entry_time(datetime.now(timezone.utc), min_notice_seconds=10)
         if not self.can_scan_by_schedule(entry_time, schedule):
+            audit_decision("blocked", reason="timing_window", entry_time=entry_time.isoformat())
             return
 
+        audit_decision(
+            "trade_selected",
+            asset=candidate.asset_symbol,
+            direction=candidate.decision.direction,
+            confidence=candidate.decision.confidence,
+            payout=candidate.payout,
+            reason=candidate.decision.reason,
+        )
         await self.create_and_send_trade(candidate, settings, entry_time)
 
     def can_scan_by_schedule(self, entry_time: datetime, schedule: dict) -> bool:
         if schedule["mode"] == "open":
+            audit_decision("timing_allowed", mode="open")
             return True
 
         last_trade_time = database.get_last_trade_time(self.db_path)
         if not last_trade_time:
+            audit_decision("timing_allowed", reason="no_previous_trade")
             return True
 
         last_dt = parse_datetime(last_trade_time)
         elapsed = (entry_time - last_dt).total_seconds()
         target_window = max(0, int(schedule.get("signal_interval_seconds") or 0))
         allowed = elapsed >= target_window
+        audit_decision(
+            "timing_check",
+            elapsed_seconds=round(elapsed),
+            target_window_seconds=target_window,
+            allowed=allowed,
+        )
         logger.info(
             "Signal timing window elapsed_seconds=%.0f target_window_seconds=%s allowed=%s",
             elapsed,
@@ -126,21 +157,27 @@ class TradingRunner:
         stats = database.get_today_stats(self.db_path)
         max_daily = safe_int(settings.get("max_daily_trades"), 0)
         if max_daily > 0 and stats["total"] >= max_daily:
+            audit_decision("risk_check", rule="max_daily_trades", current=stats["total"], limit=max_daily, allowed=False)
             return "max_daily_trades"
 
         daily_loss_limit = safe_float(settings.get("daily_loss_limit"), 0)
         if daily_loss_limit > 0 and stats["profit_loss"] <= -daily_loss_limit:
+            audit_decision("risk_check", rule="daily_loss_limit", current=stats["profit_loss"], limit=daily_loss_limit, allowed=False)
             return "daily_loss_limit"
 
         stop_after_losses = safe_int(settings.get("stop_after_losses"), 0)
-        if stop_after_losses > 0 and database.count_consecutive_losses(self.db_path) >= stop_after_losses:
+        consecutive_losses = database.count_consecutive_losses(self.db_path)
+        if stop_after_losses > 0 and consecutive_losses >= stop_after_losses:
+            audit_decision("risk_check", rule="stop_after_losses", current=consecutive_losses, limit=stop_after_losses, allowed=False)
             return "stop_after_losses"
 
+        audit_decision("risk_check", allowed=True, today_trades=stats["total"], today_profit_loss=stats["profit_loss"])
         return None
 
     async def find_best_candidate(self, settings: dict) -> TradeCandidate | None:
         assets = database.get_enabled_assets(self.db_path)
         if not assets:
+            audit_decision("scan_blocked", reason="no_enabled_assets")
             logger.info("No enabled assets.")
             return None
 
@@ -149,6 +186,13 @@ class TradingRunner:
         min_payout = safe_float(settings.get("min_payout"), 0)
         profile = get_profile(duration_seconds)
         offset = max(3600, (profile["min_candles"] + 10) * 60)
+        audit_decision(
+            "scan_started",
+            enabled_assets=len(assets),
+            duration_seconds=duration_seconds,
+            min_confidence=min_confidence,
+            min_payout=min_payout,
+        )
 
         await self.ensure_client()
         best: TradeCandidate | None = None
@@ -164,6 +208,7 @@ class TradingRunner:
                     candles = await self.client.get_candles(quotex_symbol, period=60, offset=offset)
                 if not candles:
                     empty_candle_assets.append(asset_symbol)
+                    audit_decision("asset_rejected", asset=asset_symbol, reason="empty_candles", empty_count=len(empty_candle_assets))
                     logger.info("Empty candles asset=%s empty_count=%s", asset_symbol, len(empty_candle_assets))
                     if len(empty_candle_assets) >= empty_candle_limit:
                         await self.reconnect_client(
@@ -172,9 +217,11 @@ class TradingRunner:
                         return None
                     continue
             except QuotexAssetUnavailable as exc:
+                audit_decision("asset_rejected", asset=asset_symbol, reason="asset_unavailable", detail=exc)
                 logger.info("Skipping unavailable asset=%s reason=%s", asset_symbol, exc)
                 continue
-            except Exception:
+            except Exception as exc:
+                audit_decision("asset_rejected", asset=asset_symbol, reason="candles_error", detail=exc)
                 logger.exception("Failed to fetch candles asset=%s", asset_symbol)
                 continue
 
@@ -185,6 +232,14 @@ class TradingRunner:
                 min_confidence=min_confidence,
                 drop_open_candle=True,
             )
+            audit_decision(
+                "asset_analyzed",
+                asset=asset_symbol,
+                direction=decision.direction,
+                confidence=decision.confidence,
+                has_trade=decision.has_trade,
+                reason=decision.reason,
+            )
             logger.info(
                 "Decision asset=%s direction=%s confidence=%s reason=%s",
                 asset_symbol,
@@ -194,19 +249,23 @@ class TradingRunner:
             )
 
             if decision.direction == NO_TRADE:
+                audit_decision("asset_rejected", asset=asset_symbol, reason="strategy_no_trade", confidence=decision.confidence)
                 continue
             payout = None
             if min_payout > 0:
                 try:
                     async with self.client_lock:
                         payout = await self.client.get_payout(quotex_symbol, duration_seconds)
-                except Exception:
+                except Exception as exc:
+                    audit_decision("asset_rejected", asset=asset_symbol, reason="payout_error", detail=exc)
                     logger.exception("Failed to read payout asset=%s", asset_symbol)
                     continue
                 if payout is None:
+                    audit_decision("asset_rejected", asset=asset_symbol, reason="payout_unavailable", min_payout=min_payout)
                     logger.info("Skipping asset=%s because payout is unavailable min_payout=%s", asset_symbol, min_payout)
                     continue
                 if payout < min_payout:
+                    audit_decision("asset_rejected", asset=asset_symbol, reason="payout_below_min", payout=payout, min_payout=min_payout)
                     logger.info("Skipping asset=%s payout=%s below min_payout=%s", asset_symbol, payout, min_payout)
                     continue
 
@@ -219,7 +278,12 @@ class TradingRunner:
             )
             if not best or candidate.decision.confidence > best.decision.confidence:
                 best = candidate
+                audit_decision("best_candidate_updated", asset=asset_symbol, confidence=decision.confidence, direction=decision.direction)
 
+        if best:
+            audit_decision("scan_completed", result="candidate_found", asset=best.asset_symbol, confidence=best.decision.confidence)
+        else:
+            audit_decision("scan_completed", result="no_candidate")
         return best
 
     async def create_and_send_trade(self, candidate: TradeCandidate, settings: dict, entry_time: datetime) -> None:
@@ -232,6 +296,7 @@ class TradingRunner:
         execution_offset_ms = self.get_entry_offset_ms(candidate.asset_symbol, settings)
 
         if account_type != "DEMO":
+            audit_decision("blocked", reason="non_demo_account", account_type=account_type)
             logger.warning("Auto buying blocked because account_type=%s. DEMO only is allowed.", account_type)
             return
 
@@ -282,6 +347,7 @@ class TradingRunner:
                 "status": "SCHEDULED",
             },
         )
+        audit_decision("trade_scheduled", trade_id=trade_id, asset=candidate.asset_symbol, direction=candidate.decision.direction, confidence=candidate.decision.confidence, entry=entry_time.isoformat(), expiry=expiry_time.isoformat())
         logger.info(
             "Trade scheduled id=%s asset=%s direction=%s confidence=%s entry=%s expiry=%s",
             trade_id,
@@ -314,6 +380,7 @@ class TradingRunner:
             entry_reached_at = datetime.now(timezone.utc)
             entry_send_delta_ms = (entry_reached_at - entry_time).total_seconds() * 1000
             entry_lag_ms = max(0, entry_send_delta_ms)
+            audit_decision("order_send_reached", trade_id=trade_id, offset_ms=execution_offset_ms, delta_ms=round(entry_send_delta_ms))
             logger.info(
                 "Trade order send reached id=%s scheduled=%s send_target=%s actual=%s offset_ms=%s delta_ms=%.0f",
                 trade_id,
@@ -335,6 +402,7 @@ class TradingRunner:
 
             order_id = extract_order_id(buy_info)
             buy_latency_ms = (datetime.now(timezone.utc) - buy_started_at).total_seconds() * 1000
+            audit_decision("buy_response", trade_id=trade_id, status=buy_status, order_id=order_id, latency_ms=round(buy_latency_ms))
             logger.info(
                 "DEMO buy response id=%s status=%s order_id=%s latency_ms=%.0f",
                 trade_id,
@@ -354,6 +422,7 @@ class TradingRunner:
                     buy_latency_ms=buy_latency_ms,
                     execution_offset_ms=execution_offset_ms,
                 )
+                audit_decision("trade_error", trade_id=trade_id, stage="buy", reason="quotex_buy_failed")
                 logger.warning("Trade buy failed id=%s response=%s", trade_id, safe_json_dumps(buy_info))
                 if should_reconnect_after_error(buy_info):
                     await self.reconnect_client(f"buy failed id={trade_id} response={safe_json_dumps(buy_info)}")
@@ -379,6 +448,7 @@ class TradingRunner:
                 execution_offset_ms=execution_offset_ms,
                 status="OPEN",
             )
+            audit_decision("trade_opened", trade_id=trade_id, order_id=order_id, entry_price=entry_price, broker_open_delay_ms=broker_open_delay_ms, offset_ms=execution_offset_ms)
             logger.info(
                 "DEMO trade opened id=%s order_id=%s entry_price=%s broker_open_delay_ms=%s offset_ms=%s",
                 trade_id,
@@ -416,6 +486,7 @@ class TradingRunner:
                 telegram_result_message_id=",".join(result_messages),
                 status="CLOSED",
             )
+            audit_decision("trade_closed", trade_id=trade_id, result=result, entry=entry_price, exit=exit_price, profit=profit_loss)
             logger.info(
                 "DEMO trade closed id=%s order_id=%s result=%s entry=%s exit=%s profit=%s",
                 trade_id,
@@ -428,6 +499,7 @@ class TradingRunner:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            audit_decision("trade_error", trade_id=trade_id, stage="lifecycle", reason=exc)
             logger.exception("Trade lifecycle failed id=%s", trade_id)
             database.update_trade(self.db_path, trade_id, status="ERROR", error_message=str(exc))
             if should_reconnect_after_error(exc):
@@ -468,6 +540,7 @@ class TradingRunner:
             return
 
         database.set_setting(self.db_path, auto_entry_offset_key(asset_symbol), new_offset)
+        audit_decision("auto_entry_timing_adjusted", asset=asset_symbol, broker_delay_ms=round(broker_open_delay_ms), old_offset_ms=current_offset_ms, new_offset_ms=new_offset)
         logger.info(
             "Auto entry timing adjusted asset=%s broker_delay_ms=%.0f old_offset_ms=%s new_offset_ms=%s",
             asset_symbol,
@@ -497,6 +570,7 @@ class TradingRunner:
                 candidate.pre_entry_price = await self.client.get_latest_price(candidate.quotex_symbol)
             except Exception:
                 logger.exception("Failed to read pre-entry price asset=%s", candidate.asset_symbol)
+        audit_decision("trade_prepared", asset=candidate.asset_symbol, quotex_symbol=candidate.quotex_symbol, entry=entry_time.isoformat(), pre_entry_price=candidate.pre_entry_price)
         logger.info(
             "Trade prepared asset=%s quotex_symbol=%s entry=%s pre_entry_price=%s",
             candidate.asset_symbol,
@@ -517,9 +591,11 @@ class TradingRunner:
         async with self.client_lock:
             if await self.client.check_connect():
                 return
+            audit_decision("connection", action="connect")
             await self.client.connect()
 
     async def reconnect_client(self, reason: str) -> None:
+        audit_decision("connection", action="reconnect", reason=reason)
         logger.warning("Quotex reconnect requested reason=%s", reason)
         try:
             async with self.client_lock:
@@ -530,6 +606,7 @@ class TradingRunner:
     async def send_to_signal_chats(self, text: str, parse_mode: str | None = None) -> list[str]:
         chat_ids = database.get_signal_chat_ids(self.db_path)
         if not chat_ids:
+            audit_decision("telegram_send", status="skipped", reason="no_signal_chats")
             logger.warning("No signal chats configured.")
             return []
 
@@ -538,7 +615,8 @@ class TradingRunner:
             try:
                 message = await self.bot.send_message(chat_id, text, parse_mode=parse_mode)
                 refs.append(f"{chat_id}:{message.message_id}")
-            except Exception:
+            except Exception as exc:
+                audit_decision("telegram_send", status="failed", chat_id=chat_id, reason=exc)
                 logger.exception("Failed to send signal message chat_id=%s", chat_id)
         return refs
 
