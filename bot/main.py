@@ -74,6 +74,22 @@ async def command_status(message: Message) -> None:
     await message.answer(menu.status_text(CONFIG["db_path"]), reply_markup=menu.back_keyboard("main"))
 
 
+@router.message(Command("logs", "live_logs"))
+async def command_live_logs(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    if not is_admin(user_id):
+        return
+    await message.answer(menu.logs_text(), reply_markup=menu.logs_keyboard("system"))
+
+
+@router.message(Command("audit", "audit_log"))
+async def command_audit_log(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    if not is_admin(user_id):
+        return
+    await message.answer(audit_summary_text(menu.TRADER_LOG_PATH), reply_markup=menu.logs_keyboard("system"))
+
+
 @router.message(Command("cancel"))
 async def command_cancel(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id if message.from_user else None
@@ -309,7 +325,7 @@ async def fallback_message(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
     if not is_admin(user_id):
         return
-    await message.answer("اكتب /menu لفتح لوحة التحكم.")
+    await message.answer("اكتب /menu لفتح لوحة التحكم.\n\nأوامر مفيدة:\n/logs للسجل المباشر\n/audit لسجل قرارات البوت")
 
 
 def parse_input_value(raw: str, input_config: dict):
