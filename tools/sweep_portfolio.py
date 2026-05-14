@@ -19,6 +19,9 @@ from backtest_strategy import load_candles  # noqa: E402
 class PortfolioRow:
     rank: int
     duration_seconds: int
+    candle_seconds: int
+    horizon_candles: int
+    drop_open_candle: bool
     min_confidence: int
     lookback: int
     step: int
@@ -47,14 +50,21 @@ def collect_input_files(paths: list[Path]) -> list[Path]:
     return sorted(set(files))
 
 
-def combo_key(row: SweepRow) -> tuple[int, int, int, int]:
-    return (row.duration_seconds, row.min_confidence, row.lookback, row.step)
+def combo_key(row: SweepRow) -> tuple[int, int, bool, int, int, int]:
+    return (
+        row.duration_seconds,
+        row.candle_seconds,
+        row.drop_open_candle,
+        row.min_confidence,
+        row.lookback,
+        row.step,
+    )
 
 
-def aggregate_rows(rows_by_combo: dict[tuple[int, int, int, int], list[SweepRow]]) -> list[PortfolioRow]:
+def aggregate_rows(rows_by_combo: dict[tuple[int, int, bool, int, int, int], list[SweepRow]]) -> list[PortfolioRow]:
     portfolio_rows: list[PortfolioRow] = []
     for key, rows in rows_by_combo.items():
-        duration, min_confidence, lookback, step = key
+        duration, candle_seconds, drop_open_candle, min_confidence, lookback, step = key
         wins = sum(row.wins for row in rows)
         losses = sum(row.losses for row in rows)
         draws = sum(row.draws for row in rows)
@@ -68,10 +78,15 @@ def aggregate_rows(rows_by_combo: dict[tuple[int, int, int, int], list[SweepRow]
         average_score = sum(scores) / len(scores) if scores else 0.0
         worst_score = min(scores) if scores else 0.0
         consistency_score = round((average_score * 0.7) + (worst_score * 0.3), 4)
+        horizon_values = {row.horizon_candles for row in rows}
+        horizon_candles = min(horizon_values) if horizon_values else 0
         portfolio_rows.append(
             PortfolioRow(
                 rank=0,
                 duration_seconds=duration,
+                candle_seconds=candle_seconds,
+                horizon_candles=horizon_candles,
+                drop_open_candle=drop_open_candle,
                 min_confidence=min_confidence,
                 lookback=lookback,
                 step=step,
@@ -110,8 +125,10 @@ def run_portfolio_sweep(
     min_confidences: list[int],
     lookbacks: list[int],
     steps: list[int],
+    candle_seconds: int = 60,
+    drop_open_candle: bool = True,
 ) -> list[PortfolioRow]:
-    rows_by_combo: dict[tuple[int, int, int, int], list[SweepRow]] = {}
+    rows_by_combo: dict[tuple[int, int, bool, int, int, int], list[SweepRow]] = {}
     for file_path in files:
         candles = load_candles(file_path)
         asset = file_path.stem.upper()
@@ -122,6 +139,8 @@ def run_portfolio_sweep(
             min_confidences=min_confidences,
             lookbacks=lookbacks,
             steps=steps,
+            candle_seconds=candle_seconds,
+            drop_open_candle=drop_open_candle,
         )
         for row in rows:
             rows_by_combo.setdefault(combo_key(row), []).append(row)
@@ -134,13 +153,15 @@ def print_table(rows: list[PortfolioRow], limit: int) -> None:
     if not rows:
         print("No valid combinations were tested.")
         return
-    header = "rank | duration | min_conf | lookback | files | trades | wins | losses | win_rate | avg_score | worst | consistency"
+    header = "rank | duration | candle_s | horizon | min_conf | lookback | files | trades | wins | losses | win_rate | avg_score | worst | consistency"
     print(header)
     print("-" * len(header))
     for row in rows[:limit]:
         print(
             f"{row.rank:>4} | "
             f"{row.duration_seconds:>8} | "
+            f"{row.candle_seconds:>8} | "
+            f"{row.horizon_candles:>7} | "
             f"{row.min_confidence:>8} | "
             f"{row.lookback:>8} | "
             f"{row.files_tested:>5} | "
@@ -181,10 +202,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run parameter sweeps across multiple candle files.")
     parser.add_argument("paths", nargs="+", type=Path, help="Candle files or directories containing .json/.csv candles")
     parser.add_argument("--durations", nargs="+", default=["180"])
+    parser.add_argument("--candle-seconds", type=int, default=60, help="Seconds represented by each candle")
     parser.add_argument("--min-confidences", nargs="+", default=["70", "75", "80"])
     parser.add_argument("--lookbacks", nargs="+", default=["60", "90", "120"])
     parser.add_argument("--steps", nargs="+", default=["1"])
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument(
+        "--keep-open-candle",
+        action="store_true",
+        help="Keep the latest candle in strategy windows. Default drops it to match live strategy behavior.",
+    )
     parser.add_argument("--csv-out", type=Path)
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
@@ -197,6 +224,7 @@ def main() -> int:
     min_confidences = parse_ints(args.min_confidences)
     lookbacks = parse_ints(args.lookbacks)
     steps = parse_ints(args.steps)
+    drop_open_candle = not args.keep_open_candle
 
     rows = run_portfolio_sweep(
         files=files,
@@ -204,12 +232,16 @@ def main() -> int:
         min_confidences=min_confidences,
         lookbacks=lookbacks,
         steps=steps,
+        candle_seconds=args.candle_seconds,
+        drop_open_candle=drop_open_candle,
     )
     print_table(rows, args.top)
 
     settings = {
         "files": [str(path) for path in files],
         "durations": durations,
+        "candle_seconds": args.candle_seconds,
+        "drop_open_candle": drop_open_candle,
         "min_confidences": min_confidences,
         "lookbacks": lookbacks,
         "steps": steps,

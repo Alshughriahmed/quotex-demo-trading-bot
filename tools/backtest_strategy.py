@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -93,6 +94,14 @@ def normalize_input_candle(row: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def calculate_horizon(duration_seconds: int, candle_seconds: int) -> int:
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be greater than zero")
+    if candle_seconds <= 0:
+        raise ValueError("candle_seconds must be greater than zero")
+    return max(1, int(math.ceil(duration_seconds / candle_seconds)))
+
+
 def run_backtest(
     candles: list[dict[str, Any]],
     asset: str,
@@ -100,13 +109,15 @@ def run_backtest(
     min_confidence: int,
     lookback: int,
     step: int,
+    candle_seconds: int = 60,
+    drop_open_candle: bool = True,
 ) -> tuple[BacktestResult, list[BacktestTrade]]:
     if step <= 0:
         raise ValueError("step must be greater than zero")
     if lookback <= 0:
         raise ValueError("lookback must be greater than zero")
 
-    horizon = max(1, duration_seconds // 60)
+    horizon = calculate_horizon(duration_seconds, candle_seconds)
     result = BacktestResult()
     trades: list[BacktestTrade] = []
     index = lookback
@@ -119,7 +130,7 @@ def run_backtest(
             candles=window,
             duration_seconds=duration_seconds,
             min_confidence=min_confidence,
-            drop_open_candle=False,
+            drop_open_candle=drop_open_candle,
         )
 
         if decision.direction == NO_TRADE:
@@ -214,17 +225,25 @@ def main() -> int:
     parser.add_argument("path", type=Path, help="Path to candles .json or .csv")
     parser.add_argument("--asset", default="BACKTEST/ASSET")
     parser.add_argument("--duration", type=int, default=180, help="Trade duration in seconds")
+    parser.add_argument("--candle-seconds", type=int, default=60, help="Seconds represented by each candle")
     parser.add_argument("--min-confidence", type=int, default=75)
     parser.add_argument("--lookback", type=int, default=90, help="Number of candles per strategy window")
     parser.add_argument("--step", type=int, default=1, help="How many candles to move after each scan")
+    parser.add_argument(
+        "--keep-open-candle",
+        action="store_true",
+        help="Keep the latest candle in strategy windows. Default drops it to match live strategy behavior.",
+    )
     parser.add_argument("--json-out", type=Path, help="Optional path to write a JSON backtest report")
     parser.add_argument("--csv-out", type=Path, help="Optional path to write a CSV trade list")
     args = parser.parse_args()
 
     candles = load_candles(args.path)
-    if len(candles) < args.lookback + max(1, args.duration // 60) + 1:
-        raise SystemExit("Not enough candles for this lookback and duration.")
+    horizon = calculate_horizon(args.duration, args.candle_seconds)
+    if len(candles) < args.lookback + horizon + 1:
+        raise SystemExit("Not enough candles for this lookback, duration, and candle size.")
 
+    drop_open_candle = not args.keep_open_candle
     result, trades = run_backtest(
         candles=candles,
         asset=args.asset,
@@ -232,6 +251,8 @@ def main() -> int:
         min_confidence=args.min_confidence,
         lookback=args.lookback,
         step=args.step,
+        candle_seconds=args.candle_seconds,
+        drop_open_candle=drop_open_candle,
     )
     print_report(result)
 
@@ -239,6 +260,9 @@ def main() -> int:
         "source": str(args.path),
         "asset": args.asset,
         "duration_seconds": args.duration,
+        "candle_seconds": args.candle_seconds,
+        "horizon_candles": horizon,
+        "drop_open_candle": drop_open_candle,
         "min_confidence": args.min_confidence,
         "lookback": args.lookback,
         "step": args.step,

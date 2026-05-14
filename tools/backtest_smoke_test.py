@@ -48,6 +48,8 @@ def main() -> int:
                 "TEST/SMOKE",
                 "--duration",
                 "180",
+                "--candle-seconds",
+                "60",
                 "--min-confidence",
                 "65",
                 "--lookback",
@@ -93,6 +95,15 @@ def main() -> int:
         for key in ("settings", "summary", "trades"):
             if key not in report:
                 raise AssertionError(f"JSON report missing key: {key}")
+        expected_settings = {
+            "candle_seconds": 60,
+            "horizon_candles": 3,
+            "drop_open_candle": True,
+        }
+        for key, expected_value in expected_settings.items():
+            actual_value = report["settings"].get(key)
+            if actual_value != expected_value:
+                raise AssertionError(f"Expected settings[{key!r}]={expected_value!r}, got {actual_value!r}")
         if "total_signals" not in report["summary"]:
             raise AssertionError("JSON summary missing total_signals")
         if "outcome" not in csv_report.read_text(encoding="utf-8").splitlines()[0]:
