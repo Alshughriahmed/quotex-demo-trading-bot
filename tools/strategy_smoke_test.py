@@ -56,18 +56,30 @@ def assert_direction(name: str, actual: str, expected: str) -> None:
         raise AssertionError(f"{name}: expected {expected}, got {actual}")
 
 
+def require_reason(name: str, reason: str, expected: str) -> None:
+    if expected not in reason:
+        raise AssertionError(f"{name}: expected reason to include {expected!r}, got {reason!r}")
+
+
 def main() -> int:
     uptrend = make_trend_candles(90, start=1.0, step=0.00025, body=0.00003, wick=0.00005)
     up = analyze("TEST/UP", uptrend, duration_seconds=180, min_confidence=65, drop_open_candle=True)
     assert_direction("uptrend", up.direction, CALL)
     if up.confidence < 65:
         raise AssertionError(f"uptrend confidence too low: {up.confidence}")
+    require_reason("uptrend", up.reason, "ضغط صعود")
 
     downtrend = make_trend_candles(90, start=1.2, step=-0.00025, body=-0.00003, wick=0.00005)
     down = analyze("TEST/DOWN", downtrend, duration_seconds=180, min_confidence=65, drop_open_candle=True)
     assert_direction("downtrend", down.direction, PUT)
     if down.confidence < 65:
         raise AssertionError(f"downtrend confidence too low: {down.confidence}")
+    require_reason("downtrend", down.reason, "ضغط هبوط")
+    if down.confidence < up.confidence - 8:
+        raise AssertionError(
+            "downtrend confidence is unexpectedly far below uptrend confidence: "
+            f"down={down.confidence}, up={up.confidence}"
+        )
 
     flat = analyze("TEST/FLAT", make_flat_candles(90), duration_seconds=180, min_confidence=65, drop_open_candle=True)
     assert_direction("flat_market", flat.direction, NO_TRADE)
