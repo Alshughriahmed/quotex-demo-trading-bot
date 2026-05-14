@@ -33,7 +33,10 @@ def make_sample_candles(count: int = 140) -> list[dict[str, float]]:
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory() as tmpdir:
-        candles_path = Path(tmpdir) / "sample_candles.json"
+        tmp = Path(tmpdir)
+        candles_path = tmp / "sample_candles.json"
+        json_report = tmp / "report.json"
+        csv_report = tmp / "trades.csv"
         candles_path.write_text(json.dumps(make_sample_candles()), encoding="utf-8")
 
         completed = subprocess.run(
@@ -51,29 +54,49 @@ def main() -> int:
                 "80",
                 "--step",
                 "3",
+                "--json-out",
+                str(json_report),
+                "--csv-out",
+                str(csv_report),
             ],
             check=False,
             capture_output=True,
             text=True,
         )
 
-    if completed.returncode != 0:
-        print(completed.stdout)
-        print(completed.stderr, file=sys.stderr)
-        return completed.returncode
+        if completed.returncode != 0:
+            print(completed.stdout)
+            print(completed.stderr, file=sys.stderr)
+            return completed.returncode
 
-    output = completed.stdout
-    required = [
-        "Offline strategy backtest",
-        "Signals:",
-        "Wins:",
-        "Losses:",
-        "No-trade windows:",
-        "Win rate excluding draws:",
-    ]
-    missing = [item for item in required if item not in output]
-    if missing:
-        raise AssertionError(f"Backtest output missing expected fields: {missing}\n{output}")
+        output = completed.stdout
+        required = [
+            "Offline strategy backtest",
+            "Signals:",
+            "Wins:",
+            "Losses:",
+            "No-trade windows:",
+            "Win rate excluding draws:",
+            "JSON report written:",
+            "CSV trades written:",
+        ]
+        missing = [item for item in required if item not in output]
+        if missing:
+            raise AssertionError(f"Backtest output missing expected fields: {missing}\n{output}")
+
+        if not json_report.exists():
+            raise AssertionError("JSON report was not created")
+        if not csv_report.exists():
+            raise AssertionError("CSV report was not created")
+
+        report = json.loads(json_report.read_text(encoding="utf-8"))
+        for key in ("settings", "summary", "trades"):
+            if key not in report:
+                raise AssertionError(f"JSON report missing key: {key}")
+        if "total_signals" not in report["summary"]:
+            raise AssertionError("JSON summary missing total_signals")
+        if "outcome" not in csv_report.read_text(encoding="utf-8").splitlines()[0]:
+            raise AssertionError("CSV report header missing outcome")
 
     print("Backtest smoke test passed.")
     print(output)
