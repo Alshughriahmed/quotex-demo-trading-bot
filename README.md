@@ -22,6 +22,7 @@
 - إضافة `.gitignore` مناسب.
 - إضافة `.env.example`.
 - إضافة `requirements.txt`.
+- إضافة فحص أمان محلي يمنع رفع ملفات التشغيل والأسرار بالخطأ.
 
 ## التشغيل المحلي
 
@@ -49,9 +50,26 @@ DATABASE_PATH=data.db
 ```bash
 cd bot
 python main.py --init-db
+python main.py --check-config
 python main.py --check
 python main.py
 ```
+
+## فحص الأمان قبل الرفع
+
+قبل أي `git add` أو `git push` شغّل من مجلد المشروع الرئيسي:
+
+```bash
+python tools/safety_check.py
+```
+
+إذا ظهر خطأ، لا ترفع الكود قبل إصلاحه. هذا الفحص يبحث عن:
+
+- ملفات `.env` الحقيقية.
+- قواعد البيانات `*.db`.
+- ملفات الجلسات مثل `session.json`.
+- مجلدات التشغيل مثل `logs/` و `backups/`.
+- أنماط واضحة لتوكنات أو كلمات مرور مكتوبة داخل الملفات.
 
 ## أوامر Telegram
 
