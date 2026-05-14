@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 
 import database
 import menu
+from audit_log import audit_summary_text
 from config import ConfigError, load_config, startup_summary
 from demo_guardrails import DEMO_ONLY_NOTICE, enforce_demo_only
 from states import INPUTS, INPUTS_BY_STATE, AdminInput
@@ -102,6 +103,16 @@ async def callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id if callback.from_user else None
     if not is_admin(user_id):
         await callback.answer("غير مصرح", show_alert=True)
+        return
+
+    if callback.data == "btn:logs_status":
+        result = {
+            "text": audit_summary_text(menu.TRADER_LOG_PATH),
+            "reply_markup": menu.logs_keyboard("system"),
+        }
+        await state.clear()
+        await callback.answer("تم تحديث سجل القرارات")
+        await edit_admin_menu(callback, result)
         return
 
     result = menu.handle_callback(CONFIG["db_path"], callback.data or "")
