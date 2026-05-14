@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-ENV_PATH = Path(".env")
+BOT_DIR = Path(__file__).resolve().parent
+ENV_PATH = BOT_DIR / ".env"
 PLACEHOLDER_VALUES = {
     "",
     "changeme",
@@ -67,6 +68,13 @@ def require_not_placeholder(name: str, value: str) -> None:
         raise ConfigError(f"{name} is missing or still uses a placeholder value.")
 
 
+def normalize_db_path(raw: str) -> str:
+    db_path = Path(raw.strip() or "data.db")
+    if db_path.is_absolute():
+        return str(db_path)
+    return str(BOT_DIR / db_path)
+
+
 def load_config(*, require_token: bool = True) -> AppConfig:
     env = load_env()
 
@@ -74,7 +82,7 @@ def load_config(*, require_token: bool = True) -> AppConfig:
     if require_token:
         require_not_placeholder("TELEGRAM_BOT_TOKEN", token)
 
-    db_path = env.get("DATABASE_PATH", "data.db").strip() or "data.db"
+    db_path = normalize_db_path(env.get("DATABASE_PATH", "data.db"))
     admin_ids = parse_csv(env.get("ADMIN_TELEGRAM_IDS", ""))
     signals_chat_id = env.get("SIGNALS_CHAT_ID", "").strip()
 
