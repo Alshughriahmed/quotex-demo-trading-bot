@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from backtest_strategy import calculate_horizon, load_candles, run_backtest  # noqa: E402
+from experiment_manifest import build_manifest  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -181,6 +182,20 @@ def write_json(path: Path, rows: list[SweepRow], settings: dict[str, Any]) -> No
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def write_manifest(path: Path, command: list[str], input_path: Path, outputs: list[Path]) -> None:
+    if not outputs:
+        raise ValueError("--manifest-out requires at least one output artifact such as --json-out or --csv-out")
+    manifest = build_manifest(
+        root=ROOT,
+        command=command,
+        inputs=[input_path],
+        outputs=outputs,
+        note="DEMO-only offline strategy sweep experiment.",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def parse_ints(values: list[str]) -> list[int]:
     return [int(value) for value in values]
 
@@ -202,6 +217,7 @@ def main() -> int:
     )
     parser.add_argument("--csv-out", type=Path, help="Optional CSV output path")
     parser.add_argument("--json-out", type=Path, help="Optional JSON output path")
+    parser.add_argument("--manifest-out", type=Path, help="Optional path to write a reproducibility manifest")
     args = parser.parse_args()
 
     candles = load_candles(args.path)
@@ -234,12 +250,18 @@ def main() -> int:
         "steps": steps,
         "candles": len(candles),
     }
+    output_artifacts: list[Path] = []
     if args.csv_out:
         write_csv(args.csv_out, rows)
+        output_artifacts.append(args.csv_out)
         print(f"CSV sweep written: {args.csv_out}")
     if args.json_out:
         write_json(args.json_out, rows, settings)
+        output_artifacts.append(args.json_out)
         print(f"JSON sweep written: {args.json_out}")
+    if args.manifest_out:
+        write_manifest(args.manifest_out, sys.argv, args.path, output_artifacts)
+        print(f"Experiment manifest written: {args.manifest_out}")
     return 0
 
 
