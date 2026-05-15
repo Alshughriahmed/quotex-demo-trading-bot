@@ -48,5 +48,8 @@ jobs:
       - name: Run strategy acceptance gate smoke test
         run: python tools/strategy_acceptance_gate_smoke_test.py
 
+      - name: Run experiment manifest smoke test
+        run: python tools/experiment_manifest_smoke_test.py
+
       - name: Run local safety check
         run: python tools/safety_check.py
