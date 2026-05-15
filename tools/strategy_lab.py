@@ -13,6 +13,17 @@ def load_portfolio_sweep(path: Path) -> dict[str, Any]:
     return data
 
 
+def load_manifest(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    required = {"created_at_utc", "command", "inputs", "outputs", "safety"}
+    missing = required.difference(data)
+    if missing:
+        raise ValueError(f"Manifest is missing required keys: {sorted(missing)}")
+    return data
+
+
 def risk_flags(row: dict[str, Any]) -> list[str]:
     flags: list[str] = []
     loss_rate = float(row.get("loss_rate", 0) or 0)
@@ -61,7 +72,26 @@ def classify_row(row: dict[str, Any]) -> tuple[str, list[str]]:
     return "REJECT", notes or ["metrics are not strong enough"]
 
 
-def build_markdown_report(data: dict[str, Any], top: int) -> str:
+def append_manifest_section(lines: list[str], manifest_path: Path | None, manifest: dict[str, Any] | None) -> None:
+    lines.append("## Experiment manifest")
+    lines.append("")
+    if manifest is None:
+        lines.append("No manifest was supplied. For reproducible review, rerun the sweep with `--manifest-out` and pass it to Strategy Lab with `--manifest`.")
+        lines.append("")
+        return
+
+    safety = manifest.get("safety") or {}
+    lines.append(f"- Manifest path: {manifest_path}")
+    lines.append(f"- Created at UTC: {manifest.get('created_at_utc')}")
+    lines.append(f"- Repository commit: {manifest.get('repo_commit')}")
+    lines.append(f"- Command: `{' '.join(str(part) for part in manifest.get('command', []))}`")
+    lines.append(f"- Input files: {len(manifest.get('inputs', []))}")
+    lines.append(f"- Output artifacts: {len(manifest.get('outputs', []))}")
+    lines.append(f"- DEMO-only recorded: {safety.get('demo_only') is True}")
+    lines.append("")
+
+
+def build_markdown_report(data: dict[str, Any], top: int, manifest_path: Path | None = None, manifest: dict[str, Any] | None = None) -> str:
     settings = data.get("settings") or {}
     rows = data.get("results") or []
     lines: list[str] = []
@@ -69,6 +99,7 @@ def build_markdown_report(data: dict[str, Any], top: int) -> str:
     lines.append("")
     lines.append("This report summarizes an offline portfolio sweep. It is an engineering decision aid, not a profitability guarantee.")
     lines.append("")
+    append_manifest_section(lines, manifest_path, manifest)
     lines.append("## Sweep settings")
     lines.append("")
     lines.append(f"- Files tested: {len(settings.get('files', []))}")
@@ -155,11 +186,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Create a human-readable strategy lab report from a portfolio sweep JSON.")
     parser.add_argument("path", type=Path, help="Path to portfolio sweep JSON produced by sweep_portfolio.py")
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--manifest", type=Path, help="Optional experiment manifest produced with --manifest-out")
     parser.add_argument("--markdown-out", type=Path, help="Optional markdown report output path")
     args = parser.parse_args()
 
     data = load_portfolio_sweep(args.path)
-    report = build_markdown_report(data, top=args.top)
+    manifest = load_manifest(args.manifest)
+    report = build_markdown_report(data, top=args.top, manifest_path=args.manifest, manifest=manifest)
     print(report)
     if args.markdown_out:
         args.markdown_out.write_text(report, encoding="utf-8")
