@@ -37,6 +37,7 @@ def main() -> int:
         candles_path = tmp / "sample_candles.json"
         json_report = tmp / "report.json"
         csv_report = tmp / "trades.csv"
+        manifest_report = tmp / "manifest.json"
         candles_path.write_text(json.dumps(make_sample_candles()), encoding="utf-8")
 
         completed = subprocess.run(
@@ -60,6 +61,8 @@ def main() -> int:
                 str(json_report),
                 "--csv-out",
                 str(csv_report),
+                "--manifest-out",
+                str(manifest_report),
             ],
             check=False,
             capture_output=True,
@@ -85,6 +88,7 @@ def main() -> int:
             "Final equity units:",
             "JSON report written:",
             "CSV trades written:",
+            "Experiment manifest written:",
         ]
         missing = [item for item in required if item not in output]
         if missing:
@@ -94,6 +98,8 @@ def main() -> int:
             raise AssertionError("JSON report was not created")
         if not csv_report.exists():
             raise AssertionError("CSV report was not created")
+        if not manifest_report.exists():
+            raise AssertionError("Manifest report was not created")
 
         report = json.loads(json_report.read_text(encoding="utf-8"))
         for key in ("settings", "summary", "trades"):
@@ -122,6 +128,19 @@ def main() -> int:
         for key in ("outcome", "equity_after_trade", "drawdown_after_trade"):
             if key not in csv_header:
                 raise AssertionError(f"CSV report header missing {key}")
+
+        manifest = json.loads(manifest_report.read_text(encoding="utf-8"))
+        for key in ("created_at_utc", "repo_commit", "command", "inputs", "outputs", "safety"):
+            if key not in manifest:
+                raise AssertionError(f"Manifest missing key: {key}")
+        if len(manifest["inputs"]) != 1:
+            raise AssertionError("Manifest should include the candle input file")
+        if len(manifest["outputs"]) != 2:
+            raise AssertionError("Manifest should include JSON and CSV output artifacts")
+        if manifest["safety"].get("demo_only") is not True:
+            raise AssertionError("Manifest should explicitly remain DEMO-only")
+        if "does not prove profitability" not in manifest["safety"].get("profitability_warning", ""):
+            raise AssertionError("Manifest missing profitability warning")
 
     print("Backtest smoke test passed.")
     print(output)
