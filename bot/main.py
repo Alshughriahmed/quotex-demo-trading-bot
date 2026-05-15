@@ -39,14 +39,53 @@ async def edit_admin_menu(callback: CallbackQuery, rendered: dict) -> None:
             raise
 
 
-async def send_test_signal(bot: Bot) -> None:
+async def send_test_signal(bot: Bot) -> dict:
     chat_ids = database.get_signal_chat_ids(CONFIG["db_path"])
     if not chat_ids and CONFIG.get("signals_chat_id"):
         chat_ids = [CONFIG["signals_chat_id"]]
     if not chat_ids:
         raise RuntimeError("لا توجد مجموعة إشارات مضبوطة. أضف المجموعة من لوحة التحكم أو اضبط SIGNALS_CHAT_ID.")
+
+    sent: list[int] = []
+    failed: list[tuple[int, str]] = []
     for chat_id in chat_ids:
-        await bot.send_message(chat_id, "تيست")
+        try:
+            await bot.send_message(chat_id, "تيست")
+            sent.append(chat_id)
+        except Exception as exc:
+            failed.append((chat_id, str(exc)))
+
+    if not sent and failed:
+        raise RuntimeError(format_test_signal_failures(failed))
+    return {"sent": sent, "failed": failed}
+
+
+def format_test_signal_failures(failures: list[tuple[int, str]], limit: int = 5) -> str:
+    lines = ["فشل إرسال الإشارة التجريبية لكل المجموعات.", "", "الأخطاء:"]
+    for chat_id, error in failures[:limit]:
+        lines.append(f"- {chat_id}: {error}")
+    if len(failures) > limit:
+        lines.append(f"... ومجموعات أخرى فاشلة: {len(failures) - limit}")
+    return "\n".join(lines)
+
+
+def format_test_signal_result(result: dict) -> str:
+    sent = result.get("sent", [])
+    failed = result.get("failed", [])
+    if not failed:
+        return f"تم إرسال إشارة تجريبية إلى {len(sent)} مجموعة."
+
+    lines = [
+        f"تم إرسال الإشارة التجريبية إلى {len(sent)} مجموعة.",
+        f"فشل الإرسال إلى {len(failed)} مجموعة.",
+        "",
+        "المجموعات التي فشل الإرسال إليها:",
+    ]
+    for chat_id, error in failed[:5]:
+        lines.append(f"- {chat_id}: {error}")
+    if len(failed) > 5:
+        lines.append(f"... ومجموعات أخرى فاشلة: {len(failed) - 5}")
+    return "\n".join(lines)
 
 
 @router.message(Command("id"))
@@ -106,12 +145,12 @@ async def command_test_signal(message: Message) -> None:
         return
 
     try:
-        await send_test_signal(message.bot)
+        result = await send_test_signal(message.bot)
     except Exception as exc:
         await message.answer(f"فشل إرسال الإشارة التجريبية:\n{exc}")
         return
 
-    await message.answer("تم إرسال إشارة تجريبية للمجموعة.")
+    await message.answer(format_test_signal_result(result))
 
 
 @router.callback_query(F.data)
@@ -134,8 +173,8 @@ async def callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
     result = menu.handle_callback(CONFIG["db_path"], callback.data or "")
     if result.get("command") == "test_signal":
         try:
-            await send_test_signal(callback.bot)
-            result["text"] = "🧪 تجربة إشارة\n\nتم إرسال إشارة تجريبية للمجموعة."
+            delivery_result = await send_test_signal(callback.bot)
+            result["text"] = "🧪 تجربة إشارة\n\n" + format_test_signal_result(delivery_result)
         except Exception as exc:
             result["text"] = f"🧪 تجربة إشارة\n\nفشل إرسال الإشارة التجريبية:\n{exc}"
         await state.clear()
