@@ -46,6 +46,32 @@ def configured_signal_chat_ids() -> list[str]:
     return chat_ids
 
 
+def ensure_signal_chats_admin_button(db_path: str) -> None:
+    with database.connect(db_path) as db:
+        db.execute(
+            """
+            INSERT INTO telegram_admin_buttons(
+                menu_key, button_key, label, action_type, action_value, payload_json,
+                row_index, col_index, sort_order
+            )
+            VALUES ('admin', 'signal_chats', '📡 مجموعات الإشارات', 'run_command', 'signal_chats',
+                    '{"return_menu":"admin"}', 2, 1, 250)
+            ON CONFLICT(button_key) DO UPDATE SET
+                menu_key = excluded.menu_key,
+                label = excluded.label,
+                action_type = excluded.action_type,
+                action_value = excluded.action_value,
+                payload_json = excluded.payload_json,
+                row_index = excluded.row_index,
+                col_index = excluded.col_index,
+                sort_order = excluded.sort_order,
+                enabled = 1,
+                updated_at = CURRENT_TIMESTAMP
+            """
+        )
+        db.commit()
+
+
 async def send_test_signal(bot: Bot) -> dict:
     chat_ids = configured_signal_chat_ids()
     if not chat_ids:
@@ -197,6 +223,16 @@ async def callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
         }
         await state.clear()
         await callback.answer("تم تحديث سجل القرارات")
+        await edit_admin_menu(callback, result)
+        return
+
+    if callback.data == "btn:signal_chats":
+        result = {
+            "text": signal_chats_text(),
+            "reply_markup": menu.back_keyboard("admin"),
+        }
+        await state.clear()
+        await callback.answer("تم عرض مجموعات الإشارات")
         await edit_admin_menu(callback, result)
         return
 
@@ -478,6 +514,7 @@ async def async_main() -> None:
         admin_ids=config["admin_ids"],
         signals_chat_id=config["signals_chat_id"],
     )
+    ensure_signal_chats_admin_button(config["db_path"])
     enforce_demo_only(config["db_path"])
 
     if args.init_db:
