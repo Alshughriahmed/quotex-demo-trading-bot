@@ -12,6 +12,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bot"))
 
+from experiment_manifest import build_manifest  # noqa: E402
 from trading.strategy import CALL, NO_TRADE, PUT, analyze  # noqa: E402
 
 
@@ -256,6 +257,20 @@ def write_csv_report(path: Path, trades: list[BacktestTrade]) -> None:
             writer.writerow(asdict(trade))
 
 
+def write_manifest(path: Path, command: list[str], input_path: Path, outputs: list[Path]) -> None:
+    if not outputs:
+        raise ValueError("--manifest-out requires at least one output artifact such as --json-out or --csv-out")
+    manifest = build_manifest(
+        root=ROOT,
+        command=command,
+        inputs=[input_path],
+        outputs=outputs,
+        note="DEMO-only offline backtest experiment.",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Offline backtest for the local strategy logic.")
     parser.add_argument("path", type=Path, help="Path to candles .json or .csv")
@@ -272,6 +287,7 @@ def main() -> int:
     )
     parser.add_argument("--json-out", type=Path, help="Optional path to write a JSON backtest report")
     parser.add_argument("--csv-out", type=Path, help="Optional path to write a CSV trade list")
+    parser.add_argument("--manifest-out", type=Path, help="Optional path to write a reproducibility manifest")
     args = parser.parse_args()
 
     candles = load_candles(args.path)
@@ -304,12 +320,18 @@ def main() -> int:
         "step": args.step,
         "candles": len(candles),
     }
+    output_artifacts: list[Path] = []
     if args.json_out:
         write_json_report(args.json_out, result, trades, settings)
+        output_artifacts.append(args.json_out)
         print(f"JSON report written: {args.json_out}")
     if args.csv_out:
         write_csv_report(args.csv_out, trades)
+        output_artifacts.append(args.csv_out)
         print(f"CSV trades written: {args.csv_out}")
+    if args.manifest_out:
+        write_manifest(args.manifest_out, sys.argv, args.path, output_artifacts)
+        print(f"Experiment manifest written: {args.manifest_out}")
     return 0
 
 
