@@ -12,6 +12,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         sweep_path = tmp / "portfolio_sweep.json"
+        manifest_path = tmp / "portfolio_sweep_manifest.json"
         report_path = tmp / "strategy_lab.md"
         payload = {
             "settings": {
@@ -104,7 +105,24 @@ def main() -> int:
                 },
             ],
         }
+        manifest = {
+            "created_at_utc": "2026-05-15T04:00:00+00:00",
+            "repo_commit": "abc123",
+            "command": ["python", "tools/sweep_portfolio.py", "data/candles", "--manifest-out", str(manifest_path)],
+            "inputs": [
+                {"path": "eurusd.json", "size_bytes": 100, "sha256": "a" * 64},
+                {"path": "gbpusd.json", "size_bytes": 100, "sha256": "b" * 64},
+            ],
+            "outputs": [
+                {"path": "portfolio_sweep.json", "size_bytes": 100, "sha256": "c" * 64},
+            ],
+            "safety": {
+                "demo_only": True,
+                "profitability_warning": "Backtest and sweep artifacts are engineering evidence only; they do not prove profitability or enable real-money trading.",
+            },
+        }
         sweep_path.write_text(json.dumps(payload), encoding="utf-8")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
         completed = subprocess.run(
             [
@@ -113,6 +131,8 @@ def main() -> int:
                 str(sweep_path),
                 "--top",
                 "3",
+                "--manifest",
+                str(manifest_path),
                 "--markdown-out",
                 str(report_path),
             ],
@@ -129,6 +149,10 @@ def main() -> int:
         output = completed.stdout
         required = [
             "# Strategy Lab Report",
+            "Experiment manifest",
+            "Manifest path:",
+            "Repository commit: abc123",
+            "DEMO-only recorded: True",
             "Candle seconds",
             "Top candidates",
             "PROMISING",
@@ -145,7 +169,7 @@ def main() -> int:
         if not report_path.exists():
             raise AssertionError("Strategy lab markdown report was not created")
         report = report_path.read_text(encoding="utf-8")
-        for item in ("Safety note", "Loss rate", "Final equity", "This project remains DEMO-only"):
+        for item in ("Safety note", "Loss rate", "Final equity", "This project remains DEMO-only", "Experiment manifest"):
             if item not in report:
                 raise AssertionError(f"Strategy lab report missing {item!r}")
 
