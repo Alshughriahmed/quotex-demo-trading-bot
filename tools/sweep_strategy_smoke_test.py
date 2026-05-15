@@ -37,6 +37,7 @@ def main() -> int:
         candles_path = tmp / "sample_candles.json"
         csv_report = tmp / "sweep.csv"
         json_report = tmp / "sweep.json"
+        manifest_report = tmp / "sweep_manifest.json"
         candles_path.write_text(json.dumps(make_sample_candles()), encoding="utf-8")
 
         completed = subprocess.run(
@@ -62,6 +63,8 @@ def main() -> int:
                 str(csv_report),
                 "--json-out",
                 str(json_report),
+                "--manifest-out",
+                str(manifest_report),
             ],
             check=False,
             capture_output=True,
@@ -79,6 +82,7 @@ def main() -> int:
             "rank | duration",
             "CSV sweep written:",
             "JSON sweep written:",
+            "Experiment manifest written:",
         ]
         missing = [item for item in required if item not in output]
         if missing:
@@ -87,11 +91,20 @@ def main() -> int:
             raise AssertionError("Sweep CSV was not created")
         if not json_report.exists():
             raise AssertionError("Sweep JSON was not created")
+        if not manifest_report.exists():
+            raise AssertionError("Sweep manifest was not created")
         data = json.loads(json_report.read_text(encoding="utf-8"))
         if "settings" not in data or "results" not in data:
             raise AssertionError("Sweep JSON missing settings or results")
         if not data["results"]:
             raise AssertionError("Sweep produced no results")
+        manifest = json.loads(manifest_report.read_text(encoding="utf-8"))
+        if len(manifest.get("inputs", [])) != 1:
+            raise AssertionError("Sweep manifest should include the candle input file")
+        if len(manifest.get("outputs", [])) != 2:
+            raise AssertionError("Sweep manifest should include CSV and JSON outputs")
+        if manifest.get("safety", {}).get("demo_only") is not True:
+            raise AssertionError("Sweep manifest must preserve DEMO-only flag")
 
     print("Strategy sweep smoke test passed.")
     print(output)
