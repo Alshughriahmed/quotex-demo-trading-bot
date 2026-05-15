@@ -44,6 +44,7 @@ def main() -> int:
         )
         csv_report = tmp / "portfolio.csv"
         json_report = tmp / "portfolio.json"
+        manifest_report = tmp / "portfolio_manifest.json"
 
         completed = subprocess.run(
             [
@@ -66,6 +67,8 @@ def main() -> int:
                 str(csv_report),
                 "--json-out",
                 str(json_report),
+                "--manifest-out",
+                str(manifest_report),
             ],
             check=False,
             capture_output=True,
@@ -83,6 +86,7 @@ def main() -> int:
             "rank | duration",
             "CSV portfolio sweep written:",
             "JSON portfolio sweep written:",
+            "Experiment manifest written:",
         ]
         missing = [item for item in required if item not in output]
         if missing:
@@ -91,6 +95,8 @@ def main() -> int:
             raise AssertionError("Portfolio sweep CSV was not created")
         if not json_report.exists():
             raise AssertionError("Portfolio sweep JSON was not created")
+        if not manifest_report.exists():
+            raise AssertionError("Portfolio sweep manifest was not created")
         data = json.loads(json_report.read_text(encoding="utf-8"))
         if "settings" not in data or "results" not in data:
             raise AssertionError("Portfolio sweep JSON missing settings or results")
@@ -98,6 +104,13 @@ def main() -> int:
             raise AssertionError("Portfolio sweep produced no results")
         if data["results"][0].get("files_tested", 0) < 1:
             raise AssertionError("Portfolio sweep did not record tested files")
+        manifest = json.loads(manifest_report.read_text(encoding="utf-8"))
+        if len(manifest.get("inputs", [])) != 2:
+            raise AssertionError("Portfolio manifest should include both input candle files")
+        if len(manifest.get("outputs", [])) != 2:
+            raise AssertionError("Portfolio manifest should include CSV and JSON outputs")
+        if manifest.get("safety", {}).get("demo_only") is not True:
+            raise AssertionError("Portfolio manifest must preserve DEMO-only flag")
 
     print("Portfolio sweep smoke test passed.")
     print(output)
