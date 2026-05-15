@@ -151,6 +151,7 @@ DEFAULT_BUTTONS = [
     ("system", "back_from_system", "⬅️ رجوع", "open_menu", "main", 99, 1, {}),
     ("admin", "add_group", "➕ إضافة مجموعة", "request_input", "add_group", 1, 1, {"return_menu": "admin"}),
     ("admin", "add_admin", "➕ إضافة أدمن", "request_input", "add_admin", 1, 2, {"return_menu": "admin"}),
+    ("admin", "signal_chats", "📡 مجموعات الإشارات", "run_command", "signal_chats", 2, 1, {"return_menu": "admin"}),
     ("admin", "back_from_admin", "⬅️ رجوع", "open_menu", "main", 99, 1, {}),
     ("ai", "ai_enable", "▶️ تشغيل AI", "set_setting", "ai_enabled=true", 1, 1, {"return_menu": "ai"}),
     ("ai", "ai_disable", "⏸️ إيقاف AI", "set_setting", "ai_enabled=false", 1, 2, {"return_menu": "ai"}),
@@ -559,6 +560,7 @@ def upsert_chat(db: sqlite3.Connection, chat_id, title=None, chat_type=None, pur
             title = COALESCE(excluded.title, telegram_chats.title),
             chat_type = COALESCE(excluded.chat_type, telegram_chats.chat_type),
             purpose = excluded.purpose,
+            enabled = 1,
             updated_at = CURRENT_TIMESTAMP
         """,
         (str(chat_id), title, chat_type, purpose),
