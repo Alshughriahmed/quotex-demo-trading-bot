@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import logging
 import sys
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -19,6 +20,7 @@ from trading.trader import TradingRunner
 
 
 CONFIG = {}
+logger = logging.getLogger(__name__)
 router = Router()
 
 
@@ -46,30 +48,14 @@ def configured_signal_chat_ids() -> list[str]:
     return chat_ids
 
 
-def ensure_signal_chats_admin_button(db_path: str) -> None:
-    with database.connect(db_path) as db:
-        db.execute(
-            """
-            INSERT INTO telegram_admin_buttons(
-                menu_key, button_key, label, action_type, action_value, payload_json,
-                row_index, col_index, sort_order
-            )
-            VALUES ('admin', 'signal_chats', '📡 مجموعات الإشارات', 'run_command', 'signal_chats',
-                    '{"return_menu":"admin"}', 2, 1, 250)
-            ON CONFLICT(button_key) DO UPDATE SET
-                menu_key = excluded.menu_key,
-                label = excluded.label,
-                action_type = excluded.action_type,
-                action_value = excluded.action_value,
-                payload_json = excluded.payload_json,
-                row_index = excluded.row_index,
-                col_index = excluded.col_index,
-                sort_order = excluded.sort_order,
-                enabled = 1,
-                updated_at = CURRENT_TIMESTAMP
-            """
-        )
-        db.commit()
+def chat_member_status(member) -> str:
+    status = getattr(member, "status", "")
+    value = getattr(status, "value", status)
+    return str(value).lower()
+
+
+def is_group_manager(member) -> bool:
+    return chat_member_status(member) in {"creator", "administrator"}
 
 
 async def send_test_signal(bot: Bot) -> dict:
@@ -77,21 +63,22 @@ async def send_test_signal(bot: Bot) -> dict:
     if not chat_ids:
         raise RuntimeError("لا توجد مجموعة إشارات مضبوطة. أضف المجموعة من لوحة التحكم أو اضبط SIGNALS_CHAT_ID.")
 
-    sent: list[int] = []
-    failed: list[tuple[int, str]] = []
+    sent: list[str] = []
+    failed: list[tuple[str, str]] = []
     for chat_id in chat_ids:
         try:
             await bot.send_message(chat_id, "تيست")
             sent.append(chat_id)
         except Exception as exc:
             failed.append((chat_id, str(exc)))
+        await asyncio.sleep(0.05)
 
     if not sent and failed:
         raise RuntimeError(format_test_signal_failures(failed))
     return {"sent": sent, "failed": failed}
 
 
-def format_test_signal_failures(failures: list[tuple[int, str]], limit: int = 5) -> str:
+def format_test_signal_failures(failures: list[tuple[str, str]], limit: int = 5) -> str:
     lines = ["فشل إرسال الإشارة التجريبية لكل المجموعات.", "", "الأخطاء:"]
     for chat_id, error in failures[:limit]:
         lines.append(f"- {chat_id}: {error}")
@@ -166,7 +153,8 @@ async def command_live_logs(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
     if not is_admin(user_id):
         return
-    await message.answer(menu.logs_text(), reply_markup=menu.logs_keyboard("system"))
+    logs_text = await asyncio.to_thread(menu.logs_text)
+    await message.answer(logs_text, reply_markup=menu.logs_keyboard("system"))
 
 
 @router.message(Command("audit", "audit_log"))
@@ -174,7 +162,8 @@ async def command_audit_log(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
     if not is_admin(user_id):
         return
-    await message.answer(audit_summary_text(menu.TRADER_LOG_PATH), reply_markup=menu.logs_keyboard("system"))
+    text = await asyncio.to_thread(audit_summary_text, menu.TRADER_LOG_PATH)
+    await message.answer(text, reply_markup=menu.logs_keyboard("system"))
 
 
 @router.message(Command("cancel"))
@@ -211,14 +200,30 @@ async def command_signal_chats(message: Message) -> None:
 
 @router.callback_query(F.data)
 async def callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        await safe_callback_handler(callback, state)
+    except Exception:
+        logger.exception("Callback handler failed for data=%r", callback.data)
+        try:
+            await state.clear()
+        except Exception:
+            logger.exception("Failed to clear state after callback error")
+        try:
+            await callback.answer("حدث خطأ غير متوقع. اكتب /menu وحاول مرة أخرى.", show_alert=True)
+        except Exception:
+            logger.exception("Failed to answer failed callback")
+
+
+async def safe_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id if callback.from_user else None
     if not is_admin(user_id):
         await callback.answer("غير مصرح", show_alert=True)
         return
 
     if callback.data == "btn:logs_status":
+        text = await asyncio.to_thread(audit_summary_text, menu.TRADER_LOG_PATH)
         result = {
-            "text": audit_summary_text(menu.TRADER_LOG_PATH),
+            "text": text,
             "reply_markup": menu.logs_keyboard("system"),
         }
         await state.clear()
@@ -331,14 +336,24 @@ async def save_group_input(message: Message, state: FSMContext, input_config: di
         await message.answer("اكتب chat_id صالح. مثال: -1001234567890")
         return
 
+    user_id = message.from_user.id if message.from_user else None
+    if not user_id:
+        await message.answer("لم أستطع معرفة حساب Telegram الخاص بك. اكتب /menu وحاول مرة أخرى.")
+        return
+
     try:
         chat = await message.bot.get_chat(chat_id)
+        member = await message.bot.get_chat_member(chat_id, user_id)
     except Exception as exc:
         await message.answer(
-            "لم أستطع الوصول لهذه المجموعة.\n"
-            "تأكد أن البوت مضاف داخل المجموعة وأن الرقم صحيح.\n\n"
+            "لم أستطع الوصول لهذه المجموعة أو التحقق من صلاحيتك فيها.\n"
+            "تأكد أن البوت مضاف داخل المجموعة وأنك مشرف فيها وأن الرقم صحيح.\n\n"
             f"الخطأ: {exc}"
         )
+        return
+
+    if not is_group_manager(member):
+        await message.answer("لإضافة هذه المجموعة يجب أن تكون أنت مالكًا أو مشرفًا فيها.")
         return
 
     database.add_telegram_chat(
@@ -514,7 +529,6 @@ async def async_main() -> None:
         admin_ids=config["admin_ids"],
         signals_chat_id=config["signals_chat_id"],
     )
-    ensure_signal_chats_admin_button(config["db_path"])
     enforce_demo_only(config["db_path"])
 
     if args.init_db:
