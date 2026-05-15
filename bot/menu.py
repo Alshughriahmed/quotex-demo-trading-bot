@@ -229,6 +229,13 @@ def run_command(db_path: str, command: str, payload: dict) -> dict:
             "command": "test_signal",
         }
 
+    if command == "signal_chats":
+        return {
+            "text": signal_chats_text(db_path),
+            "reply_markup": back_keyboard(return_menu),
+            "answer": "",
+        }
+
     if command == "connection_status":
         return {
             "text": connection_text(),
@@ -662,6 +669,23 @@ def admin_text(db_path: str) -> str:
         f"مجموعات الإشارات: {chat_count}\n\n"
         "أضف مجموعة جديدة أو أدمن جديد من هنا."
     )
+
+
+def signal_chats_text(db_path: str) -> str:
+    chat_ids = database.get_signal_chat_ids(db_path)
+    if not chat_ids:
+        return (
+            "📡 مجموعات الإشارات\n\n"
+            "لا توجد مجموعة إشارات محفوظة في قاعدة البيانات.\n\n"
+            "أضف مجموعة من لوحة التحكم: 👥 الإدارة ← ➕ إضافة مجموعة، "
+            "أو اضبط SIGNALS_CHAT_ID في bot/.env كخيار احتياطي."
+        )
+
+    lines = ["📡 مجموعات الإشارات", "", f"العدد: {len(chat_ids)}", ""]
+    for index, chat_id in enumerate(chat_ids, start=1):
+        lines.append(f"{index}. {chat_id}")
+    lines.extend(["", "استخدم /test_signal لتجربة الإرسال لهذه المجموعات."])
+    return "\n".join(lines)
 
 
 def today_report_text(db_path: str) -> str:
