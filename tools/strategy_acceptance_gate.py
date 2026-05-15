@@ -21,11 +21,13 @@ def load_report(path: Path) -> dict[str, Any]:
     return data
 
 
-def best_row(data: dict[str, Any]) -> dict[str, Any]:
+def candidate_rows(data: dict[str, Any], top: int) -> list[dict[str, Any]]:
     rows = data.get("results") or []
     if not rows:
         raise ValueError("Report contains no results")
-    return rows[0]
+    if top <= 0:
+        raise ValueError("--top-candidates must be greater than zero")
+    return rows[:top]
 
 
 def evaluate(row: dict[str, Any], args: argparse.Namespace) -> list[GateRule]:
@@ -93,13 +95,17 @@ def evaluate(row: dict[str, Any], args: argparse.Namespace) -> list[GateRule]:
     ]
 
 
-def print_gate_report(row: dict[str, Any], rules: list[GateRule]) -> None:
-    passed = all(rule.passed for rule in rules)
-    print("Strategy acceptance gate")
-    print("========================")
+def candidate_passed(rules: list[GateRule]) -> bool:
+    return all(rule.passed for rule in rules)
+
+
+def print_candidate(row: dict[str, Any], rules: list[GateRule]) -> None:
+    passed = candidate_passed(rules)
+    rank = row.get("rank", "unknown")
+    print(f"Candidate rank: {rank}")
     print(f"Decision: {'PASS' if passed else 'FAIL'}")
     print("")
-    print("Candidate:")
+    print("Candidate settings:")
     print(f"  duration_seconds: {row.get('duration_seconds')}")
     print(f"  candle_seconds: {row.get('candle_seconds')}")
     print(f"  horizon_candles: {row.get('horizon_candles')}")
@@ -119,12 +125,26 @@ def print_gate_report(row: dict[str, Any], rules: list[GateRule]) -> None:
         icon = "PASS" if rule.passed else "FAIL"
         print(f"  [{icon}] {rule.name}: {rule.detail}")
     print("")
+
+
+def print_gate_report(evaluated: list[tuple[dict[str, Any], list[GateRule]]]) -> None:
+    passing_candidates = [row for row, rules in evaluated if candidate_passed(rules)]
+    print("Strategy acceptance gate")
+    print("========================")
+    print(f"Decision: {'PASS' if passing_candidates else 'FAIL'}")
+    print(f"Candidates evaluated: {len(evaluated)}")
+    if passing_candidates:
+        print(f"First passing rank: {passing_candidates[0].get('rank', 'unknown')}")
+    print("")
+    for row, rules in evaluated:
+        print_candidate(row, rules)
     print("Safety: this gate is an engineering filter only. It does not prove profitability and does not enable real-money trading.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fail or pass a portfolio sweep result using conservative acceptance rules.")
     parser.add_argument("path", type=Path, help="Path to portfolio sweep JSON produced by sweep_portfolio.py")
+    parser.add_argument("--top-candidates", type=int, default=1, help="Number of ranked candidates to evaluate instead of only the first row")
     parser.add_argument("--min-files", type=int, default=2)
     parser.add_argument("--min-closed-trades", type=int, default=30)
     parser.add_argument("--min-win-rate", type=float, default=60.0)
@@ -137,10 +157,10 @@ def main() -> int:
     args = parser.parse_args()
 
     data = load_report(args.path)
-    row = best_row(data)
-    rules = evaluate(row, args)
-    print_gate_report(row, rules)
-    return 0 if all(rule.passed for rule in rules) else 1
+    rows = candidate_rows(data, args.top_candidates)
+    evaluated = [(row, evaluate(row, args)) for row in rows]
+    print_gate_report(evaluated)
+    return 0 if any(candidate_passed(rules) for _, rules in evaluated) else 1
 
 
 if __name__ == "__main__":
