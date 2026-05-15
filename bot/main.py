@@ -44,7 +44,7 @@ async def send_test_signal(bot: Bot) -> None:
     if not chat_ids and CONFIG.get("signals_chat_id"):
         chat_ids = [CONFIG["signals_chat_id"]]
     if not chat_ids:
-        raise RuntimeError("SIGNALS_CHAT_ID غير مضبوط.")
+        raise RuntimeError("لا توجد مجموعة إشارات مضبوطة. أضف المجموعة من لوحة التحكم أو اضبط SIGNALS_CHAT_ID.")
     for chat_id in chat_ids:
         await bot.send_message(chat_id, "تيست")
 
@@ -105,12 +105,12 @@ async def command_test_signal(message: Message) -> None:
     if not is_admin(user_id):
         return
 
-    signals_chat_id = CONFIG.get("signals_chat_id")
-    if not signals_chat_id:
-        await message.answer("SIGNALS_CHAT_ID غير مضبوط.")
+    try:
+        await send_test_signal(message.bot)
+    except Exception as exc:
+        await message.answer(f"فشل إرسال الإشارة التجريبية:\n{exc}")
         return
 
-    await send_test_signal(message.bot)
     await message.answer("تم إرسال إشارة تجريبية للمجموعة.")
 
 
