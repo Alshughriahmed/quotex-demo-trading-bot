@@ -242,8 +242,6 @@ def score_signal(
     trend_gap = abs(ema_fast - ema_slow) / closes[-1] if closes[-1] else 0
     atr_percent = atr_value / closes[-1] if closes[-1] else 0
     has_confirmation = False
-    has_acceptable_rsi = False
-    pressure_down = False
 
     if trend_gap > 0.00008:
         score += 10
@@ -258,7 +256,6 @@ def score_signal(
             reasons.append("RSI مناسب")
         elif 38 <= rsi_value < 45 or 68 < rsi_value <= 74:
             score += 4
-            has_acceptable_rsi = True
             cap = min(cap, 86)
             reasons.append("RSI مقبول")
         if last_bullish and last_body_ratio >= 0.45:
@@ -271,7 +268,6 @@ def score_signal(
             reasons.append("RSI مناسب")
         elif 26 <= rsi_value < 32 or 55 < rsi_value <= 62:
             score += 4
-            has_acceptable_rsi = True
             cap = min(cap, 86)
             reasons.append("RSI مقبول")
         if last_bearish and last_body_ratio >= 0.45:
@@ -323,13 +319,10 @@ def score_signal(
         reasons.append("ضغط صعود")
     if direction == PUT and closes[-1] < closes[-2] < closes[-3]:
         score += 3
-        pressure_down = True
         reasons.append("ضغط هبوط")
 
     if not has_confirmation:
         cap = min(cap, 85)
-    if has_acceptable_rsi and pressure_down:
-        cap = min(cap, 84)
 
     return max(0, min(cap, int(round(score)))), reasons or ["إشارة أساسية"]
 
