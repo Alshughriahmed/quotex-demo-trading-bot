@@ -39,10 +39,15 @@ async def edit_admin_menu(callback: CallbackQuery, rendered: dict) -> None:
             raise
 
 
-async def send_test_signal(bot: Bot) -> dict:
+def configured_signal_chat_ids() -> list[str]:
     chat_ids = database.get_signal_chat_ids(CONFIG["db_path"])
     if not chat_ids and CONFIG.get("signals_chat_id"):
         chat_ids = [CONFIG["signals_chat_id"]]
+    return chat_ids
+
+
+async def send_test_signal(bot: Bot) -> dict:
+    chat_ids = configured_signal_chat_ids()
     if not chat_ids:
         raise RuntimeError("لا توجد مجموعة إشارات مضبوطة. أضف المجموعة من لوحة التحكم أو اضبط SIGNALS_CHAT_ID.")
 
@@ -85,6 +90,23 @@ def format_test_signal_result(result: dict) -> str:
         lines.append(f"- {chat_id}: {error}")
     if len(failed) > 5:
         lines.append(f"... ومجموعات أخرى فاشلة: {len(failed) - 5}")
+    return "\n".join(lines)
+
+
+def signal_chats_text() -> str:
+    chat_ids = configured_signal_chat_ids()
+    if not chat_ids:
+        return (
+            "📡 مجموعات الإشارات\n\n"
+            "لا توجد مجموعة إشارات مضبوطة.\n\n"
+            "أضف مجموعة من لوحة التحكم: 👥 الإدارة ← ➕ إضافة مجموعة، "
+            "أو اضبط SIGNALS_CHAT_ID في bot/.env."
+        )
+
+    lines = ["📡 مجموعات الإشارات", "", f"العدد: {len(chat_ids)}", ""]
+    for index, chat_id in enumerate(chat_ids, start=1):
+        lines.append(f"{index}. {chat_id}")
+    lines.extend(["", "استخدم /test_signal لتجربة الإرسال لهذه المجموعات."])
     return "\n".join(lines)
 
 
@@ -151,6 +173,14 @@ async def command_test_signal(message: Message) -> None:
         return
 
     await message.answer(format_test_signal_result(result))
+
+
+@router.message(Command("signal_chats", "groups"))
+async def command_signal_chats(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    if not is_admin(user_id):
+        return
+    await message.answer(signal_chats_text(), reply_markup=menu.back_keyboard("admin"))
 
 
 @router.callback_query(F.data)
@@ -364,7 +394,13 @@ async def fallback_message(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
     if not is_admin(user_id):
         return
-    await message.answer("اكتب /menu لفتح لوحة التحكم.\n\nأوامر مفيدة:\n/logs للسجل المباشر\n/audit لسجل قرارات البوت")
+    await message.answer(
+        "اكتب /menu لفتح لوحة التحكم.\n\n"
+        "أوامر مفيدة:\n"
+        "/logs للسجل المباشر\n"
+        "/audit لسجل قرارات البوت\n"
+        "/signal_chats لعرض مجموعات الإشارات"
+    )
 
 
 def parse_input_value(raw: str, input_config: dict):
