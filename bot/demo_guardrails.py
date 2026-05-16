@@ -12,15 +12,16 @@ DEMO_ONLY_NOTICE = (
 
 
 def enforce_demo_only(db_path: str) -> None:
-    """Force the bot into DEMO mode and hide confusing REAL UI actions.
+    """Force the bot into Telegram DEMO mode and hide unsafe stage controls.
 
     This project is still a development/testing bot. The trading runner already
-    refuses REAL execution, but the UI must not offer live-money controls because
-    that creates a false sense that REAL execution is supported.
+    refuses REAL execution, but the UI must not offer live-money controls or ask
+    for broker credentials during the Telegram-only DEMO stage.
     """
     database.set_setting(db_path, "account_type", "DEMO")
     with database.connect(db_path) as db:
         _disable_buttons(db)
+        _relabel_buttons(db)
         _force_quotex_account_demo(db)
         db.commit()
 
@@ -33,9 +34,27 @@ def _disable_buttons(db: sqlite3.Connection) -> None:
             updated_at = CURRENT_TIMESTAMP
         WHERE button_key IN (
             'account_type_menu',
-            'account_real'
+            'account_real',
+            'quotex_menu',
+            'change_quotex_email',
+            'change_quotex_password'
         )
         """
+    )
+
+
+def _relabel_buttons(db: sqlite3.Connection) -> None:
+    db.executemany(
+        """
+        UPDATE telegram_admin_buttons
+        SET label = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE button_key = ?
+        """,
+        [
+            ("▶️ تشغيل DEMO scanner", "start_bot"),
+            ("⏸️ إيقاف DEMO scanner", "stop_bot"),
+        ],
     )
 
 
@@ -44,6 +63,7 @@ def _force_quotex_account_demo(db: sqlite3.Connection) -> None:
         """
         UPDATE quotex_accounts
         SET account_type = 'DEMO',
+            enabled = 0,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = 1
         """
