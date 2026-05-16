@@ -12,12 +12,7 @@ DEMO_ONLY_NOTICE = (
 
 
 def enforce_demo_only(db_path: str) -> None:
-    """Force the bot into Telegram DEMO mode and hide unsafe stage controls.
-
-    This project is still a development/testing bot. The trading runner already
-    refuses REAL execution, but the UI must not offer live-money controls or ask
-    for broker credentials during the Telegram-only DEMO stage.
-    """
+    """Force the bot into Telegram DEMO mode and hide unsafe stage controls."""
     database.set_setting(db_path, "account_type", "DEMO")
     with database.connect(db_path) as db:
         _disable_buttons(db)
@@ -37,7 +32,8 @@ def _disable_buttons(db: sqlite3.Connection) -> None:
             'account_real',
             'quotex_menu',
             'change_quotex_email',
-            'change_quotex_password'
+            'change_quotex_password',
+            'add_admin'
         )
         """
     )
