@@ -173,3 +173,44 @@ Expected behavior:
 - Rotate exposed Telegram token before long-running use.
 - Add stricter super-admin logic before multi-admin testing.
 - Add formal automated tests later.
+
+## 2026-05-17 - Local Verification Of Telegram DEMO Hardening
+
+### Verification Evidence
+
+User pulled commit `3015baa` locally, then verified:
+
+- `git status --short` was clean.
+- `git log -1 --oneline` showed `3015baa docs: record telegram demo hardening batch`.
+- `python -m py_compile bot/main.py bot/demo_guardrails.py` completed without errors.
+- `python main.py --check` connected successfully to Telegram and printed the DEMO-only guardrail.
+- `python main.py` started local polling successfully.
+
+### Telegram Tests Verified
+
+- `/menu` opened normally.
+- Main buttons showed `DEMO scanner` wording.
+- `/signal_chats` initially showed one active group from `database`.
+- `/test_signal` sent a test signal successfully to one group.
+- `/clear_signal_chats` disabled one saved database group.
+- `/signal_chats` then showed one active group from `.env fallback`.
+- `/test_signal` still sent successfully to one group after fallback activation.
+
+### Result
+
+Telegram DEMO hardening batch is locally verified.
+
+Current verified status:
+
+- Telegram runtime: PASS
+- DEMO guardrail: PASS
+- Admin panel: PASS
+- Signal group diagnostics: PASS
+- Database-to-env fallback behavior: PASS
+- Test signal delivery after fallback: PASS
+
+### Still Pending
+
+- Rotate the exposed Telegram token before any long-running use.
+- Add stricter super-admin logic before allowing multi-admin testing.
+- Add automated tests or a formal manual QA checklist later.
