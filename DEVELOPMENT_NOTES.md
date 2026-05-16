@@ -1,4 +1,4 @@
-﻿# Development Notes - Quotex Demo Trading Bot
+# Development Notes - Quotex Demo Trading Bot
 
 This file tracks engineering checkpoints, local test results, safety decisions, and next actions for the DEMO-only Telegram bot project.
 
@@ -94,7 +94,8 @@ Correct runtime command:
 
 ```powershell
 cd C:\Users\alshu_6e3b5qq\Desktop\QTB-GITHUB-FRESH-2026\bot
-python main.py```
+python main.py
+```
 
 Correct check command:
 
@@ -113,3 +114,62 @@ python main.py --check
 6. Keep the project DEMO-only.
 7. Do not add Quotex credentials at this stage.
 8. Continue updating this file after every important engineering checkpoint.
+
+## 2026-05-17 - Telegram DEMO Hardening Batch
+
+### Purpose
+
+Apply the first hardening patch after the local Telegram DEMO smoke test and code review.
+
+### Changes
+
+- Disabled Quotex credential input during the Telegram-only DEMO stage.
+- Disabled the Quotex settings menu and email/password buttons through the DEMO guardrail.
+- Forced local Quotex account status to DEMO and disabled during startup.
+- Relabeled the start/stop buttons to `DEMO scanner` to avoid implying real trading.
+- Improved signal chat diagnostics:
+  - shows whether a chat ID comes from database or `.env fallback`.
+  - shows when `.env fallback` exists but is not currently active because database groups exist.
+- Added `/clear_signal_chats` and `/clear_groups` to disable saved database signal groups and fall back to `SIGNALS_CHAT_ID`.
+- Added friendlier Telegram delivery errors for common group problems.
+
+### Safety Result
+
+- The Telegram-only stage no longer invites the user to enter Quotex credentials.
+- The UI is clearer that this is DEMO scanner behavior, not real-money trading.
+- Wrong saved group IDs can be disabled without raw SQLite commands.
+
+### Required Local Verification After Pull
+
+Run from `bot`:
+
+```powershell
+python main.py --check
+python main.py
+```
+
+Then test in Telegram:
+
+```text
+/menu
+/signal_chats
+/test_signal
+/clear_signal_chats
+/signal_chats
+/test_signal
+```
+
+Expected behavior:
+
+- `/menu` opens normally.
+- Start/stop buttons mention `DEMO scanner`.
+- Quotex credential entry is not available.
+- `/signal_chats` shows source information.
+- `/clear_signal_chats` disables database groups and fallback from `.env` becomes active if configured.
+- `/test_signal` still sends to the active signals group.
+
+### Still Pending
+
+- Rotate exposed Telegram token before long-running use.
+- Add stricter super-admin logic before multi-admin testing.
+- Add formal automated tests later.
