@@ -41,11 +41,59 @@ async def edit_admin_menu(callback: CallbackQuery, rendered: dict) -> None:
             raise
 
 
+def configured_signal_chat_entries(include_inactive_env: bool = False) -> list[dict]:
+    db_chat_ids = database.get_signal_chat_ids(CONFIG["db_path"])
+    env_chat_id = (CONFIG.get("signals_chat_id") or "").strip()
+
+    entries: list[dict] = []
+    if db_chat_ids:
+        entries.extend(
+            {
+                "chat_id": chat_id,
+                "source": "database",
+                "active": True,
+            }
+            for chat_id in db_chat_ids
+        )
+        if include_inactive_env and env_chat_id and env_chat_id not in db_chat_ids:
+            entries.append(
+                {
+                    "chat_id": env_chat_id,
+                    "source": ".env fallback",
+                    "active": False,
+                }
+            )
+        return entries
+
+    if env_chat_id:
+        return [
+            {
+                "chat_id": env_chat_id,
+                "source": ".env fallback",
+                "active": True,
+            }
+        ]
+
+    return []
+
+
 def configured_signal_chat_ids() -> list[str]:
-    chat_ids = database.get_signal_chat_ids(CONFIG["db_path"])
-    if not chat_ids and CONFIG.get("signals_chat_id"):
-        chat_ids = [CONFIG["signals_chat_id"]]
-    return chat_ids
+    return [entry["chat_id"] for entry in configured_signal_chat_entries() if entry.get("active")]
+
+
+def clear_saved_signal_chats() -> int:
+    with database.connect(CONFIG["db_path"]) as db:
+        cursor = db.execute(
+            """
+            UPDATE telegram_chats
+            SET enabled = 0,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE purpose = 'signals'
+              AND enabled = 1
+            """
+        )
+        db.commit()
+        return int(cursor.rowcount or 0)
 
 
 def chat_member_status(member) -> str:
@@ -78,10 +126,23 @@ async def send_test_signal(bot: Bot) -> dict:
     return {"sent": sent, "failed": failed}
 
 
+def friendly_telegram_error(error: str) -> str:
+    text = (error or "").lower()
+    if "chat not found" in text:
+        return "chat not found — تأكد أن chat_id صحيح وأن البوت موجود داخل المجموعة."
+    if "bot was kicked" in text or "bot was blocked" in text:
+        return "bot removed or blocked — أعد إضافة البوت إلى المجموعة."
+    if "not enough rights" in text or "have no rights" in text or "forbidden" in text:
+        return "permission denied — تأكد أن البوت يملك صلاحية الإرسال داخل المجموعة."
+    if "bad request" in text:
+        return f"bad request — راجع chat_id وإعدادات المجموعة. التفاصيل: {error}"
+    return error
+
+
 def format_test_signal_failures(failures: list[tuple[str, str]], limit: int = 5) -> str:
     lines = ["فشل إرسال الإشارة التجريبية لكل المجموعات.", "", "الأخطاء:"]
     for chat_id, error in failures[:limit]:
-        lines.append(f"- {chat_id}: {error}")
+        lines.append(f"- {chat_id}: {friendly_telegram_error(error)}")
     if len(failures) > limit:
         lines.append(f"... ومجموعات أخرى فاشلة: {len(failures) - limit}")
     return "\n".join(lines)
@@ -100,15 +161,16 @@ def format_test_signal_result(result: dict) -> str:
         "المجموعات التي فشل الإرسال إليها:",
     ]
     for chat_id, error in failed[:5]:
-        lines.append(f"- {chat_id}: {error}")
+        lines.append(f"- {chat_id}: {friendly_telegram_error(error)}")
     if len(failed) > 5:
         lines.append(f"... ومجموعات أخرى فاشلة: {len(failed) - 5}")
     return "\n".join(lines)
 
 
 def signal_chats_text() -> str:
-    chat_ids = configured_signal_chat_ids()
-    if not chat_ids:
+    entries = configured_signal_chat_entries(include_inactive_env=True)
+    active_entries = [entry for entry in entries if entry.get("active")]
+    if not active_entries:
         return (
             "📡 مجموعات الإشارات\n\n"
             "لا توجد مجموعة إشارات مضبوطة.\n\n"
@@ -116,11 +178,37 @@ def signal_chats_text() -> str:
             "أو اضبط SIGNALS_CHAT_ID في bot/.env."
         )
 
-    lines = ["📡 مجموعات الإشارات", "", f"العدد: {len(chat_ids)}", ""]
-    for index, chat_id in enumerate(chat_ids, start=1):
-        lines.append(f"{index}. {chat_id}")
-    lines.extend(["", "استخدم /test_signal لتجربة الإرسال لهذه المجموعات."])
+    lines = ["📡 مجموعات الإشارات", "", f"المجموعات النشطة: {len(active_entries)}", ""]
+    for index, entry in enumerate(entries, start=1):
+        status = "نشطة" if entry.get("active") else "احتياطية غير مستخدمة الآن"
+        lines.append(f"{index}. {entry['chat_id']} | المصدر: {entry['source']} | {status}")
+
+    if any(not entry.get("active") for entry in entries):
+        lines.extend(
+            [
+                "",
+                "ملاحظة: عند وجود مجموعات محفوظة في database يتم استخدامها أولًا،",
+                "وقيمة SIGNALS_CHAT_ID في .env تصبح fallback غير مستخدم مؤقتًا.",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "استخدم /test_signal لتجربة الإرسال.",
+            "استخدم /clear_signal_chats لتعطيل المجموعات المحفوظة في database والرجوع إلى .env fallback.",
+        ]
+    )
     return "\n".join(lines)
+
+
+def quotex_credentials_disabled_text() -> str:
+    return (
+        "🔐 حساب Quotex\n\n"
+        "إدخال بيانات Quotex معطل في هذه المرحلة.\n\n"
+        "المرحلة الحالية Telegram DEMO فقط: تشغيل محلي، لوحة إدارة، ومجموعة إشارات تجريبية.\n"
+        "لا تدخل إيميل أو كلمة مرور Quotex الآن."
+    )
 
 
 @router.message(Command("id"))
@@ -198,6 +286,19 @@ async def command_signal_chats(message: Message) -> None:
     await message.answer(signal_chats_text(), reply_markup=menu.back_keyboard("admin"))
 
 
+@router.message(Command("clear_signal_chats", "clear_groups"))
+async def command_clear_signal_chats(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    if not is_admin(user_id):
+        return
+    disabled_count = clear_saved_signal_chats()
+    await message.answer(
+        f"تم تعطيل {disabled_count} مجموعة محفوظة في database.\n\n"
+        "إذا كان SIGNALS_CHAT_ID مضبوطًا في bot/.env فسيصبح هو fallback النشط بعد ذلك.\n"
+        "استخدم /signal_chats للتأكد، ثم /test_signal للتجربة."
+    )
+
+
 @router.callback_query(F.data)
 async def callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
     try:
@@ -255,6 +356,17 @@ async def safe_callback_handler(callback: CallbackQuery, state: FSMContext) -> N
 
     input_key = result.get("input_key")
     if input_key:
+        if input_key in {"quotex_email", "quotex_password"}:
+            await state.clear()
+            await callback.answer("إدخال بيانات Quotex معطل في هذه المرحلة", show_alert=True)
+            await edit_admin_menu(
+                callback,
+                {
+                    "text": quotex_credentials_disabled_text(),
+                    "reply_markup": menu.back_keyboard("settings"),
+                },
+            )
+            return
         input_config = INPUTS.get(input_key)
         if not input_config:
             await callback.answer("إدخال غير مدعوم", show_alert=True)
@@ -294,6 +406,11 @@ async def input_handler(message: Message, state: FSMContext) -> None:
     if not input_config:
         await state.clear()
         await message.answer("حالة غير معروفة. اكتب /menu للرجوع.")
+        return
+
+    if input_config["kind"] in {"email", "password"}:
+        await state.clear()
+        await message.answer(quotex_credentials_disabled_text(), reply_markup=menu.back_keyboard("settings"))
         return
 
     if input_config["kind"] == "chat_id":
@@ -348,7 +465,7 @@ async def save_group_input(message: Message, state: FSMContext, input_config: di
         await message.answer(
             "لم أستطع الوصول لهذه المجموعة أو التحقق من صلاحيتك فيها.\n"
             "تأكد أن البوت مضاف داخل المجموعة وأنك مشرف فيها وأن الرقم صحيح.\n\n"
-            f"الخطأ: {exc}"
+            f"الخطأ: {friendly_telegram_error(str(exc))}"
         )
         return
 
@@ -387,27 +504,13 @@ async def save_admin_input(message: Message, state: FSMContext, input_config: di
 
 
 async def save_quotex_email_input(message: Message, state: FSMContext, input_config: dict) -> None:
-    email = (message.text or "").strip()
-    if "@" not in email or "." not in email:
-        await message.answer("اكتب إيميل صالح.")
-        return
-
-    database.upsert_quotex_account(CONFIG["db_path"], email=email, account_type="DEMO", enabled=True)
     await state.clear()
-    rendered = menu.render_menu(CONFIG["db_path"], input_config["return_menu"])
-    await message.answer(f"{input_config['saved_text']}\n\nالإيميل: {email}", reply_markup=rendered["reply_markup"])
+    await message.answer(quotex_credentials_disabled_text(), reply_markup=menu.back_keyboard("settings"))
 
 
 async def save_quotex_password_input(message: Message, state: FSMContext, input_config: dict) -> None:
-    password = (message.text or "").strip()
-    if len(password) < 4:
-        await message.answer("كلمة السر قصيرة جدًا.")
-        return
-
-    database.upsert_quotex_account(CONFIG["db_path"], password=password, account_type="DEMO", enabled=True)
     await state.clear()
-    rendered = menu.render_menu(CONFIG["db_path"], input_config["return_menu"])
-    await message.answer(input_config["saved_text"], reply_markup=rendered["reply_markup"])
+    await message.answer(quotex_credentials_disabled_text(), reply_markup=menu.back_keyboard("settings"))
 
 
 async def save_signal_interval_input(message: Message, state: FSMContext, input_config: dict) -> None:
@@ -450,7 +553,8 @@ async def fallback_message(message: Message) -> None:
         "أوامر مفيدة:\n"
         "/logs للسجل المباشر\n"
         "/audit لسجل قرارات البوت\n"
-        "/signal_chats لعرض مجموعات الإشارات"
+        "/signal_chats لعرض مجموعات الإشارات\n"
+        "/clear_signal_chats لتعطيل المجموعات المحفوظة في database"
     )
 
 
