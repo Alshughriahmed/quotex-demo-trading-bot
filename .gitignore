@@ -17,6 +17,11 @@ bot.log
 bot.pid
 backups/
 
+# local data exports
+exports/
+bot/exports/
+*.csv
+
 # python
 __pycache__/
 *.py[cod]
