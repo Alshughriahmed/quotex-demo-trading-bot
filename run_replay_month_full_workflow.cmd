@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo.
@@ -11,23 +11,23 @@ echo It does not start the bot, does not connect to a broker, and does not trade
 echo It writes research candles/signals/outcomes only inside bot\data.db.
 echo.
 
-set /p RAWCSV=Raw CSV filename in bot\external_inputs, example DAT_ASCII_USDCAD_M1_202601.csv: 
+set /p "RAWCSV=Raw CSV filename in bot\external_inputs, example DAT_ASCII_USDCAD_M1_202601.csv: "
 if "%RAWCSV%"=="" goto missing_raw
-set /p ASSET=Asset, example USD/CAD: 
+set /p "ASSET=Asset, example USD/CAD: "
 if "%ASSET%"=="" goto missing_asset
-set /p TIMEFRAME=Timeframe seconds, empty for 60: 
-if "%TIMEFRAME%"=="" set TIMEFRAME=60
-set /p SOURCEKEY=Source key, example histdata_usdcad_m1_202601: 
+set /p "TIMEFRAME=Timeframe seconds, empty for 60: "
+if "%TIMEFRAME%"=="" set "TIMEFRAME=60"
+set /p "SOURCEKEY=Source key, example histdata_usdcad_m1_202601: "
 if "%SOURCEKEY%"=="" goto missing_source
-set /p DURATION=Duration seconds, empty for 60: 
-if "%DURATION%"=="" set DURATION=60
-set /p LOOKBACK=Analysis lookback candles, empty for 300: 
-if "%LOOKBACK%"=="" set LOOKBACK=300
-set /p PAYOUT=Theoretical payout, empty for 0.80: 
-if "%PAYOUT%"=="" set PAYOUT=0.80
+set /p "DURATION=Duration seconds, empty for 60: "
+if "%DURATION%"=="" set "DURATION=60"
+set /p "LOOKBACK=Analysis lookback candles, empty for 300: "
+if "%LOOKBACK%"=="" set "LOOKBACK=300"
+set /p "PAYOUT=Theoretical payout, empty for 0.80: "
+if "%PAYOUT%"=="" set "PAYOUT=0.80"
 
-set REPLAYCSV=replay_ready_%~nRAWCSV%.csv
-set STRATEGYVERSION=replay_signal_only_v1_lookback_%LOOKBACK%
+for %%F in ("%RAWCSV%") do set "REPLAYCSV=replay_ready_%%~nF.csv"
+set "STRATEGYVERSION=replay_signal_only_v1_lookback_%LOOKBACK%"
 
 echo.
 echo Planned local workflow:
@@ -41,7 +41,7 @@ echo Lookback: %LOOKBACK%
 echo Strategy version reset: %STRATEGYVERSION%
 echo Payout: %PAYOUT%
 echo.
-set /p CONFIRM=Type RUN to start this local research workflow: 
+set /p "CONFIRM=Type RUN to start this local research workflow: "
 if /I not "%CONFIRM%"=="RUN" goto cancel
 
 echo.
