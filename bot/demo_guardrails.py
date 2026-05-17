@@ -48,8 +48,8 @@ def _relabel_buttons(db: sqlite3.Connection) -> None:
         WHERE button_key = ?
         """,
         [
-            ("▶️ تشغيل DEMO scanner", "start_bot"),
-            ("⏸️ إيقاف DEMO scanner", "stop_bot"),
+            ("▶️ تشغيل DEMO scanner إذا كان متوقف", "start_bot"),
+            ("⏸️ إيقاف DEMO scanner إذا كان يعمل", "stop_bot"),
         ],
     )
 
