@@ -19,8 +19,8 @@ git log -4 --oneline
 if errorlevel 1 goto error
 
 echo.
-echo [3/4] Running Python syntax checks...
-python -m py_compile bot\main.py bot\demo_guardrails.py bot\tools\export_trades.py
+echo [3/4] Running Python syntax checks for the full bot folder...
+python -m compileall -q bot
 if errorlevel 1 goto error
 
 echo.
