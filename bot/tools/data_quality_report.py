@@ -95,10 +95,13 @@ def main() -> int:
     with connect(DB_PATH) as connection:
         scanner_value = setting(connection, "bot_enabled", "false").lower()
         scanner_status = "RUNNING" if scanner_value == "true" else "STOPPED"
+        auto_buy_value = setting(connection, "auto_buy_enabled", "false").lower()
+        auto_buy_status = "ENABLED" if auto_buy_value == "true" else "DISABLED"
         source_status, source_detail = quotex_source_status(connection)
 
         print_header("Runtime state")
         print(f"DEMO scanner: {scanner_status} (bot_enabled={scanner_value})")
+        print(f"Automatic DEMO buying: {auto_buy_status} (auto_buy_enabled={auto_buy_value})")
         print(f"Market data source: {source_status}")
         print(f"Source detail: {source_detail}")
 
@@ -151,6 +154,8 @@ def main() -> int:
                 print(f"- {path.name} ({path.stat().st_size} bytes)")
 
         print_header("Readiness result")
+        if auto_buy_status == "ENABLED":
+            print("SAFETY WARNING: automatic DEMO buying is enabled. Disable it before market-source testing.")
         if source_status == "MISSING":
             print("NOT READY for real DEMO data collection: market data source is missing.")
         elif source_status == "DISABLED":
