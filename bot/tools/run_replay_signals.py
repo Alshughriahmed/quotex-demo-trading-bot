@@ -28,6 +28,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duration", type=int, default=60, help="Signal duration in seconds / strategy profile key.")
     parser.add_argument("--limit", type=int, default=0, help="Optional max signals to generate per group, 0 means all.")
     parser.add_argument("--include-no-trade", action="store_true", help="Store NO_TRADE decisions too.")
+    parser.add_argument(
+        "--analysis-lookback",
+        type=int,
+        default=0,
+        help="Optional trailing candle window for faster research runs. 0 means exact full-history behavior.",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=5000,
+        help="Print progress every N scanned candles per group, 0 disables progress.",
+    )
     parser.add_argument("--yes", action="store_true", help="Actually insert into research_signals. Without this flag, dry-run only.")
     return parser.parse_args()
 
@@ -109,7 +121,13 @@ def required_candles(duration: int) -> int:
     return int(STRATEGY_PROFILES[closest]["min_candles"])
 
 
-def create_run(db: sqlite3.Connection, source_key: str, timeframe: int, duration: int, dry_run: bool) -> int | None:
+def effective_strategy_version(analysis_lookback: int) -> str:
+    if analysis_lookback > 0:
+        return f"{STRATEGY_VERSION}_lookback_{analysis_lookback}"
+    return STRATEGY_VERSION
+
+
+def create_run(db: sqlite3.Connection, source_key: str, timeframe: int, duration: int, analysis_lookback: int, dry_run: bool) -> int | None:
     if dry_run:
         return None
     cursor = db.execute(
@@ -126,10 +144,10 @@ def create_run(db: sqlite3.Connection, source_key: str, timeframe: int, duration
         """,
         (
             STRATEGY_NAME,
-            STRATEGY_VERSION,
+            effective_strategy_version(analysis_lookback),
             source_key or "mixed",
             timeframe,
-            json.dumps({"duration_seconds": duration}, sort_keys=True),
+            json.dumps({"duration_seconds": duration, "analysis_lookback": analysis_lookback}, sort_keys=True),
             "Replay signal-only run. No native trades or order execution.",
         ),
     )
@@ -151,6 +169,7 @@ def insert_signal(
     row: sqlite3.Row,
     decision: Any,
     duration: int,
+    strategy_version: str,
 ) -> None:
     signal_time = candle_time_iso(row)
     expiry_time = expiry_time_iso(row, duration)
@@ -187,7 +206,7 @@ def insert_signal(
             run_id,
             row["source_key"],
             STRATEGY_NAME,
-            STRATEGY_VERSION,
+            strategy_version,
             row["asset"],
             decision.direction,
             signal_time,
@@ -217,20 +236,36 @@ def summarize_decisions(decisions: list[tuple[sqlite3.Row, Any]]) -> dict[str, i
     return summary
 
 
-def run_group(rows: list[sqlite3.Row], duration: int, limit: int, include_no_trade: bool) -> list[tuple[sqlite3.Row, Any]]:
+def run_group(
+    rows: list[sqlite3.Row],
+    duration: int,
+    limit: int,
+    include_no_trade: bool,
+    analysis_lookback: int,
+    progress_every: int,
+    label: str,
+) -> list[tuple[sqlite3.Row, Any]]:
     required = required_candles(duration)
+    lookback = max(0, int(analysis_lookback or 0))
+    if lookback and lookback < required:
+        lookback = required
+    strategy_candles = [row_to_strategy_candle(row) for row in rows]
     decisions: list[tuple[sqlite3.Row, Any]] = []
+    total_scan = max(0, len(rows) - required + 1)
     for index in range(required, len(rows) + 1):
-        window_rows = rows[:index]
-        strategy_candles = [row_to_strategy_candle(row) for row in window_rows]
+        start = max(0, index - lookback) if lookback else 0
+        candle_window = strategy_candles[start:index]
         decision = analyze(
             asset=str(rows[index - 1]["asset"]),
-            candles=strategy_candles,
+            candles=candle_window,
             duration_seconds=duration,
             drop_open_candle=False,
         )
         if include_no_trade or decision.has_trade:
             decisions.append((rows[index - 1], decision))
+        scanned = index - required + 1
+        if progress_every and (scanned % progress_every == 0 or scanned == total_scan):
+            print(f"Progress {label}: scanned {scanned}/{total_scan}, kept {len(decisions)}")
         if limit and len(decisions) >= limit:
             break
     return decisions
@@ -250,10 +285,17 @@ def main() -> int:
         return 1
 
     required = required_candles(args.duration)
-    print(f"Strategy: {STRATEGY_NAME} / {STRATEGY_VERSION}")
+    analysis_lookback = max(0, int(args.analysis_lookback or 0))
+    if analysis_lookback and analysis_lookback < required:
+        analysis_lookback = required
+    strategy_version = effective_strategy_version(analysis_lookback)
+    print(f"Strategy: {STRATEGY_NAME} / {strategy_version}")
     print(f"Timeframe: {args.timeframe}s")
     print(f"Duration/profile: {args.duration}s")
     print(f"Minimum candles needed: {required}")
+    print(f"Analysis lookback: {'full history' if analysis_lookback == 0 else str(analysis_lookback) + ' trailing candles'}")
+    print(f"Source key filter: {args.source_key.strip() or 'ALL'}")
+    print(f"Asset filter: {args.asset.strip() or 'ALL'}")
     print(f"Include NO_TRADE decisions: {args.include_no_trade}")
 
     with connect() as db:
@@ -268,7 +310,17 @@ def main() -> int:
 
         all_decisions: list[tuple[tuple[str, str, int], list[tuple[sqlite3.Row, Any]]]] = []
         for key, rows in groups.items():
-            decisions = run_group(rows, args.duration, max(0, args.limit), args.include_no_trade)
+            source_key, asset, timeframe = key
+            group_label = f"{source_key}/{asset}/{timeframe}s"
+            decisions = run_group(
+                rows,
+                args.duration,
+                max(0, args.limit),
+                args.include_no_trade,
+                analysis_lookback,
+                max(0, args.progress_every),
+                group_label,
+            )
             all_decisions.append((key, decisions))
 
         total_candidates = sum(len(decisions) for _, decisions in all_decisions)
@@ -284,12 +336,12 @@ def main() -> int:
             print("Dry run only. Re-run with --yes to insert research_signals.")
             return 0
 
-        run_id = create_run(db, args.source_key.strip(), args.timeframe, args.duration, dry_run=False)
+        run_id = create_run(db, args.source_key.strip(), args.timeframe, args.duration, analysis_lookback, dry_run=False)
         inserted = 0
         try:
             for _, decisions in all_decisions:
                 for row, decision in decisions:
-                    insert_signal(db, run_id, row, decision, args.duration)
+                    insert_signal(db, run_id, row, decision, args.duration, strategy_version)
                     inserted += 1
             finish_run(db, run_id, "FINISHED", f"Inserted research signals: {inserted}")
             db.commit()
