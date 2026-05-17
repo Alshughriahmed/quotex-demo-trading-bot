@@ -38,6 +38,13 @@ def count_where(connection: sqlite3.Connection, where_sql: str = "1=1", params: 
     return int(value or 0)
 
 
+def count_table(connection: sqlite3.Connection, table_name: str) -> int:
+    if not table_exists(connection, table_name):
+        return 0
+    value = scalar(connection, f"SELECT COUNT(*) FROM {table_name}")
+    return int(value or 0)
+
+
 def setting(connection: sqlite3.Connection, key: str, default: str = "") -> str:
     if not table_exists(connection, "bot_settings"):
         return default
@@ -113,6 +120,7 @@ def main() -> int:
 
         total = count_where(connection)
         closed = count_where(connection, "status = 'CLOSED'")
+        signal_only = count_where(connection, "status = 'SIGNAL_ONLY'")
         open_count = count_where(connection, "status IN ('OPEN', 'SCHEDULED')")
         errors = count_where(connection, "status = 'ERROR' OR error_message IS NOT NULL")
         paper = count_where(
@@ -120,15 +128,16 @@ def main() -> int:
             "strategy_name = ? OR decision_reason LIKE ?",
             (PAPER_STRATEGY, f"{PAPER_REASON_PREFIX}%"),
         )
-        real_demo = max(0, total - paper)
+        real_demo = max(0, total - paper - signal_only)
 
         print_header("Trade data")
         print(f"Total trades: {total}")
         print(f"Closed trades: {closed}")
+        print(f"Signal-only records: {signal_only}")
         print(f"Open/scheduled trades: {open_count}")
         print(f"Error trades: {errors}")
         print(f"Simulated paper trades: {paper}")
-        print(f"Non-paper DEMO records: {real_demo}")
+        print(f"Executed/non-paper DEMO records: {real_demo}")
 
         if total:
             status_rows = connection.execute(
@@ -144,6 +153,18 @@ def main() -> int:
             print("Strategy breakdown:")
             for row in strategy_rows:
                 print(f"  - {row['strategy']}: {row['total']}")
+
+        print_header("External research data")
+        datasets = count_table(connection, "external_datasets")
+        external_trades = count_table(connection, "external_trades")
+        external_strategies = count_table(connection, "external_strategies")
+        print(f"External datasets: {datasets}")
+        print(f"External trades: {external_trades}")
+        print(f"External strategies: {external_strategies}")
+        if not table_exists(connection, "external_datasets"):
+            print("Research tables: not initialized yet. Run init_research_tables when needed.")
+        elif datasets == 0:
+            print("Research tables: initialized, no external data imported yet.")
 
         print_header("Exports")
         exports = latest_exports()
@@ -165,12 +186,14 @@ def main() -> int:
         else:
             print("RUNNING: scanner is enabled and a market data source is configured.")
 
-        if paper > 0 and real_demo == 0:
+        if paper > 0 and real_demo == 0 and signal_only == 0:
             print("Note: database currently contains only simulated paper records.")
-        elif paper > 0 and real_demo > 0:
-            print("Warning: database contains both paper and non-paper records. Separate them before evaluation.")
+        elif paper > 0 and (real_demo > 0 or signal_only > 0):
+            print("Warning: database contains mixed paper and non-paper records. Separate them before evaluation.")
         elif total == 0:
             print("Note: database has no trades yet.")
+        if external_trades > 0:
+            print("Note: external research records are separate from native trades.")
 
     print()
     print("=" * 72)
