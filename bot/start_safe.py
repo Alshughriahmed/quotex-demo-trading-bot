@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import runpy
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from trading.trader import TradingRunner, audit_decision
 
 BOT_DIR = Path(__file__).resolve().parent
 MAIN_PATH = BOT_DIR / "main.py"
+DB_PATH = BOT_DIR / "data.db"
 _original_buy_demo = QuotexClient.buy_demo
 _original_complete_trade = TradingRunner.complete_trade
 
@@ -77,8 +79,54 @@ def install_runtime_guards() -> None:
     TradingRunner.complete_trade = signal_only_complete_trade
 
 
+def table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def market_source_configured(connection: sqlite3.Connection) -> bool:
+    if not table_exists(connection, "quotex_accounts"):
+        return False
+    row = connection.execute(
+        "SELECT email, password, enabled FROM quotex_accounts WHERE id = 1"
+    ).fetchone()
+    if not row:
+        return False
+    return bool(row[0] and row[1] and int(row[2] or 0) == 1)
+
+
+def enforce_startup_state() -> None:
+    if not DB_PATH.exists():
+        return
+    with sqlite3.connect(DB_PATH) as connection:
+        if not table_exists(connection, "bot_settings"):
+            return
+        scanner_row = connection.execute(
+            "SELECT value FROM bot_settings WHERE key = 'bot_enabled'"
+        ).fetchone()
+        scanner_enabled = bool(scanner_row and str(scanner_row[0]).lower() == "true")
+        if scanner_enabled and not market_source_configured(connection):
+            connection.execute(
+                """
+                INSERT INTO bot_settings(key, value, value_type, description)
+                VALUES ('bot_enabled', 'false', 'bool', 'تشغيل أو إيقاف البوت')
+                ON CONFLICT(key) DO UPDATE SET
+                    value = 'false',
+                    value_type = 'bool',
+                    description = 'تشغيل أو إيقاف البوت',
+                    updated_at = CURRENT_TIMESTAMP
+                """
+            )
+            connection.commit()
+            print("Startup guard: scanner was stopped because market data source is missing.")
+
+
 def main() -> int:
     install_runtime_guards()
+    enforce_startup_state()
     print("Safe launcher active: auto-buy guard is enforced.")
     print("Signal-only guard active: signals can be recorded without automatic DEMO buying.")
     runpy.run_path(str(MAIN_PATH), run_name="__main__")
