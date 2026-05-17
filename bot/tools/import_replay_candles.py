@@ -11,6 +11,7 @@ BOT_DIR = Path(__file__).resolve().parents[1]
 DB_PATH = BOT_DIR / "data.db"
 INBOX_DIR = BOT_DIR / "external_inputs"
 DEFAULT_SOURCE_KEY = "replay_csv"
+TEMPLATE_FILENAMES = {"replay_candles_template.csv"}
 
 import sys
 if str(BOT_DIR) not in sys.path:
@@ -35,25 +36,41 @@ OPTIONAL_COLUMNS = {"source_key", "volume", "is_closed"}
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Import historical replay candles from CSV into research_market_candles.")
-    parser.add_argument("archive", nargs="?", help="CSV file path. Defaults to newest *.csv in bot/external_inputs.")
+    parser.add_argument("archive", nargs="?", help="CSV file path. Defaults to newest non-template *.csv in bot/external_inputs.")
     parser.add_argument("--yes", action="store_true", help="Actually import. Without this flag, dry-run only.")
     parser.add_argument("--source-key", default=DEFAULT_SOURCE_KEY, help="Default source_key if CSV has no source_key column.")
     parser.add_argument("--limit", type=int, default=0, help="Optional maximum rows to read, 0 means all.")
+    parser.add_argument("--allow-template", action="store_true", help="Allow importing the generated template CSV. For tests only.")
     return parser.parse_args()
 
 
-def resolve_csv(path_arg: str | None) -> Path:
+def is_template_file(path: Path) -> bool:
+    return path.name.lower() in TEMPLATE_FILENAMES
+
+
+def resolve_csv(path_arg: str | None, allow_template: bool = False) -> Path:
     if path_arg:
         path = Path(path_arg)
         if not path.is_absolute():
             path = (Path.cwd() / path).resolve()
         if not path.exists():
             raise FileNotFoundError(f"CSV file not found: {path}")
+        if is_template_file(path) and not allow_template:
+            raise ValueError(
+                "Refusing to import replay_candles_template.csv. "
+                "Copy it to a new filename and replace the sample rows with real historical candles."
+            )
         return path
 
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
-    files = sorted(INBOX_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    all_files = sorted(INBOX_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = [path for path in all_files if allow_template or not is_template_file(path)]
     if not files:
+        if all_files:
+            raise FileNotFoundError(
+                f"Only template CSV files were found in {INBOX_DIR}. "
+                "Copy replay_candles_template.csv to a new filename and replace the sample rows with real historical candles."
+            )
         raise FileNotFoundError(f"No CSV files found in {INBOX_DIR}")
     return files[0]
 
@@ -171,7 +188,7 @@ def main() -> int:
     print("It does not start the bot, does not connect to a broker, and does not trade.")
 
     try:
-        csv_path = resolve_csv(args.archive)
+        csv_path = resolve_csv(args.archive, allow_template=args.allow_template)
         candles = load_candles(csv_path, args.source_key, max(0, args.limit))
         print(f"CSV: {csv_path}")
         summarize(candles)
