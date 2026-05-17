@@ -73,12 +73,16 @@ def resolve_archive(raw: str | None) -> Path:
 
 def prepare_source_db(zf: zipfile.ZipFile, db_name: str) -> Path:
     WORK_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_source_db()
+    SOURCE_DB_PATH.write_bytes(zf.read(db_name))
+    return SOURCE_DB_PATH
+
+
+def cleanup_source_db() -> None:
     try:
         SOURCE_DB_PATH.unlink(missing_ok=True)
     except OSError:
         pass
-    SOURCE_DB_PATH.write_bytes(zf.read(db_name))
-    return SOURCE_DB_PATH
 
 
 def init_tables(db: sqlite3.Connection) -> None:
@@ -278,43 +282,47 @@ def main() -> int:
     print(f"Archive: {archive}")
     print("Only trade rows and strategy text are imported. Native trades are not touched.")
 
-    with zipfile.ZipFile(archive) as zf:
-        db_name = find_db(zf)
-        if not db_name:
-            print("No database file found in archive.")
-            return 1
-        source_db = prepare_source_db(zf, db_name)
-        info = summary(source_db)
-        print(f"Detected database: {db_name}")
-        print(f"Detected trades: {info['total']}")
-        print(f"Wins/Losses/Draws: {info.get('wins', 0)}/{info.get('losses', 0)}/{info.get('draws', 0)}")
-        print(f"Profit/Loss: {info.get('profit_loss', 0):.2f}")
-        print(f"Period: {info.get('first_entry')} -> {info.get('last_entry')}")
-        print(f"Strategies: {', '.join(info.get('strategies') or []) or 'none'}")
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            db_name = find_db(zf)
+            if not db_name:
+                print("No database file found in archive.")
+                return 1
+            source_db = prepare_source_db(zf, db_name)
+            info = summary(source_db)
+            print(f"Detected database: {db_name}")
+            print(f"Detected trades: {info['total']}")
+            print(f"Wins/Losses/Draws: {info.get('wins', 0)}/{info.get('losses', 0)}/{info.get('draws', 0)}")
+            print(f"Profit/Loss: {info.get('profit_loss', 0):.2f}")
+            print(f"Period: {info.get('first_entry')} -> {info.get('last_entry')}")
+            print(f"Strategies: {', '.join(info.get('strategies') or []) or 'none'}")
 
-        if not args.yes:
-            print("Dry run only. Run again with --yes to import.")
-            return 0
-
-        with sqlite3.connect(DB_PATH) as target:
-            init_tables(target)
-            if already_imported(target, archive) and not args.force:
-                print("This archive path was already imported. Use --force to import again.")
+            if not args.yes:
+                print("Dry run only. Run again with --yes to import.")
                 return 0
-            dataset_id = insert_dataset(target, archive, info)
-            imported = import_rows(source_db, target, dataset_id)
-            strategy_name = (info.get("strategies") or ["external_strategy"])[0]
-            strategy_done = import_strategy(zf, target, dataset_id, strategy_name)
-            target.execute(
-                "INSERT INTO external_import_logs(dataset_id, level, message) VALUES (?, ?, ?)",
-                (dataset_id, "INFO", f"Imported {imported} external trades from {archive.name}"),
-            )
-            target.commit()
+
+            with sqlite3.connect(DB_PATH) as target:
+                init_tables(target)
+                if already_imported(target, archive) and not args.force:
+                    print("This archive path was already imported. Use --force to import again.")
+                    return 0
+                dataset_id = insert_dataset(target, archive, info)
+                imported = import_rows(source_db, target, dataset_id)
+                strategy_name = (info.get("strategies") or ["external_strategy"])[0]
+                strategy_done = import_strategy(zf, target, dataset_id, strategy_name)
+                target.execute(
+                    "INSERT INTO external_import_logs(dataset_id, level, message) VALUES (?, ?, ?)",
+                    (dataset_id, "INFO", f"Imported {imported} external trades from {archive.name}"),
+                )
+                target.commit()
+    finally:
+        cleanup_source_db()
 
     print(f"Imported dataset id: {dataset_id}")
     print(f"Imported external trades: {imported}")
     print(f"Imported strategy: {strategy_done}")
     print("External records are separate from native trades.")
+    print("Temporary external source database was cleaned up.")
     print("=" * 72)
     return 0
 
