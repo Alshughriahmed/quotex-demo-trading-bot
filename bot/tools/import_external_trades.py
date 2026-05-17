@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -11,6 +10,8 @@ from pathlib import Path
 BOT_DIR = Path(__file__).resolve().parents[1]
 DB_PATH = BOT_DIR / "data.db"
 INBOX_DIR = BOT_DIR / "external_inputs"
+WORK_DIR = BOT_DIR / "extracted_external" / "_import_work"
+SOURCE_DB_PATH = WORK_DIR / "source.db"
 
 TRADE_MAP = [
     "asset",
@@ -68,6 +69,16 @@ def resolve_archive(raw: str | None) -> Path:
     if path.suffix.lower() != ".zip":
         raise ValueError("Only .zip is supported.")
     return path
+
+
+def prepare_source_db(zf: zipfile.ZipFile, db_name: str) -> Path:
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        SOURCE_DB_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+    SOURCE_DB_PATH.write_bytes(zf.read(db_name))
+    return SOURCE_DB_PATH
 
 
 def init_tables(db: sqlite3.Connection) -> None:
@@ -133,8 +144,14 @@ def find_db(zf: zipfile.ZipFile) -> str | None:
     return names[0] if names else None
 
 
+def connect_readonly(path: Path) -> sqlite3.Connection:
+    uri = path.resolve().as_uri() + "?mode=ro&immutable=1"
+    return sqlite3.connect(uri, uri=True)
+
+
 def summary(source_db: Path) -> dict:
-    with sqlite3.connect(source_db) as db:
+    db = connect_readonly(source_db)
+    try:
         db.row_factory = sqlite3.Row
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "trades" not in tables:
@@ -162,6 +179,8 @@ def summary(source_db: Path) -> dict:
             "last_entry": row["last_entry"],
             "strategies": strategies,
         }
+    finally:
+        db.close()
 
 
 def source_columns(db: sqlite3.Connection) -> list[str]:
@@ -187,10 +206,13 @@ def insert_dataset(target: sqlite3.Connection, archive: Path, info: dict) -> int
 
 
 def import_rows(source_db: Path, target: sqlite3.Connection, dataset_id: int) -> int:
-    with sqlite3.connect(source_db) as source:
+    source = connect_readonly(source_db)
+    try:
         source.row_factory = sqlite3.Row
         cols = [c for c in source_columns(source) if c in set(TRADE_MAP + RAW_KEEP)]
         rows = source.execute(f"SELECT {', '.join(cols)} FROM trades ORDER BY id").fetchall()
+    finally:
+        source.close()
 
     count = 0
     for row in rows:
@@ -261,35 +283,33 @@ def main() -> int:
         if not db_name:
             print("No database file found in archive.")
             return 1
-        with tempfile.TemporaryDirectory() as tmp:
-            source_db = Path(tmp) / "source.db"
-            source_db.write_bytes(zf.read(db_name))
-            info = summary(source_db)
-            print(f"Detected database: {db_name}")
-            print(f"Detected trades: {info['total']}")
-            print(f"Wins/Losses/Draws: {info.get('wins', 0)}/{info.get('losses', 0)}/{info.get('draws', 0)}")
-            print(f"Profit/Loss: {info.get('profit_loss', 0):.2f}")
-            print(f"Period: {info.get('first_entry')} -> {info.get('last_entry')}")
-            print(f"Strategies: {', '.join(info.get('strategies') or []) or 'none'}")
+        source_db = prepare_source_db(zf, db_name)
+        info = summary(source_db)
+        print(f"Detected database: {db_name}")
+        print(f"Detected trades: {info['total']}")
+        print(f"Wins/Losses/Draws: {info.get('wins', 0)}/{info.get('losses', 0)}/{info.get('draws', 0)}")
+        print(f"Profit/Loss: {info.get('profit_loss', 0):.2f}")
+        print(f"Period: {info.get('first_entry')} -> {info.get('last_entry')}")
+        print(f"Strategies: {', '.join(info.get('strategies') or []) or 'none'}")
 
-            if not args.yes:
-                print("Dry run only. Run again with --yes to import.")
+        if not args.yes:
+            print("Dry run only. Run again with --yes to import.")
+            return 0
+
+        with sqlite3.connect(DB_PATH) as target:
+            init_tables(target)
+            if already_imported(target, archive) and not args.force:
+                print("This archive path was already imported. Use --force to import again.")
                 return 0
-
-            with sqlite3.connect(DB_PATH) as target:
-                init_tables(target)
-                if already_imported(target, archive) and not args.force:
-                    print("This archive path was already imported. Use --force to import again.")
-                    return 0
-                dataset_id = insert_dataset(target, archive, info)
-                imported = import_rows(source_db, target, dataset_id)
-                strategy_name = (info.get("strategies") or ["external_strategy"])[0]
-                strategy_done = import_strategy(zf, target, dataset_id, strategy_name)
-                target.execute(
-                    "INSERT INTO external_import_logs(dataset_id, level, message) VALUES (?, ?, ?)",
-                    (dataset_id, "INFO", f"Imported {imported} external trades from {archive.name}"),
-                )
-                target.commit()
+            dataset_id = insert_dataset(target, archive, info)
+            imported = import_rows(source_db, target, dataset_id)
+            strategy_name = (info.get("strategies") or ["external_strategy"])[0]
+            strategy_done = import_strategy(zf, target, dataset_id, strategy_name)
+            target.execute(
+                "INSERT INTO external_import_logs(dataset_id, level, message) VALUES (?, ?, ?)",
+                (dataset_id, "INFO", f"Imported {imported} external trades from {archive.name}"),
+            )
+            target.commit()
 
     print(f"Imported dataset id: {dataset_id}")
     print(f"Imported external trades: {imported}")
