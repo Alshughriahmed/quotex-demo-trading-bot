@@ -4,7 +4,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,11 +86,19 @@ def row_to_strategy_candle(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def candle_time_iso(row: sqlite3.Row) -> str:
+def candle_time_datetime(row: sqlite3.Row) -> datetime:
     candle_time = datetime.fromisoformat(str(row["candle_time"]).replace("Z", "+00:00"))
     if candle_time.tzinfo is None:
         candle_time = candle_time.replace(tzinfo=timezone.utc)
-    return candle_time.astimezone(timezone.utc).isoformat()
+    return candle_time.astimezone(timezone.utc)
+
+
+def candle_time_iso(row: sqlite3.Row) -> str:
+    return candle_time_datetime(row).isoformat()
+
+
+def expiry_time_iso(row: sqlite3.Row, duration: int) -> str:
+    return (candle_time_datetime(row) + timedelta(seconds=duration)).isoformat()
 
 
 def required_candles(duration: int) -> int:
@@ -145,6 +153,7 @@ def insert_signal(
     duration: int,
 ) -> None:
     signal_time = candle_time_iso(row)
+    expiry_time = expiry_time_iso(row, duration)
     indicators = dict(decision.indicators or {})
     db.execute(
         """
@@ -183,7 +192,7 @@ def insert_signal(
             decision.direction,
             signal_time,
             signal_time,
-            None,
+            expiry_time,
             duration,
             float(decision.confidence or 0),
             decision.rsi,
@@ -196,7 +205,7 @@ def insert_signal(
             indicators.get("last_body_ratio"),
             decision.reason,
             json.dumps(indicators, ensure_ascii=False, sort_keys=True),
-            json.dumps({"last_candle_time": signal_time}, ensure_ascii=False, sort_keys=True),
+            json.dumps({"last_candle_time": signal_time, "expiry_time": expiry_time}, ensure_ascii=False, sort_keys=True),
         ),
     )
 
