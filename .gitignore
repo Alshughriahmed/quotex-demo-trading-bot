@@ -22,6 +22,14 @@ exports/
 bot/exports/
 *.csv
 
+# local external dataset inbox
+external_inputs/
+bot/external_inputs/
+bot/extracted_external/
+*.zip
+*.7z
+*.rar
+
 # python
 __pycache__/
 *.py[cod]
