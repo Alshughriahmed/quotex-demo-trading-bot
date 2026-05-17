@@ -166,6 +166,22 @@ def main() -> int:
         elif datasets == 0:
             print("Research tables: initialized, no external data imported yet.")
 
+        print_header("Signal-only research data")
+        research_candles = count_table(connection, "research_market_candles")
+        research_runs = count_table(connection, "research_strategy_runs")
+        research_signals = count_table(connection, "research_signals")
+        research_outcomes = count_table(connection, "research_signal_outcomes")
+        research_analysis = count_table(connection, "research_analysis_runs")
+        print(f"Research candles: {research_candles}")
+        print(f"Research strategy runs: {research_runs}")
+        print(f"Research signals: {research_signals}")
+        print(f"Research signal outcomes: {research_outcomes}")
+        print(f"Research analysis runs: {research_analysis}")
+        if not table_exists(connection, "research_market_candles"):
+            print("Signal research tables: not initialized yet. Run init_signal_research_tables when needed.")
+        elif research_candles == 0 and research_signals == 0:
+            print("Signal research tables: initialized, no signal-only market data collected yet.")
+
         print_header("Exports")
         exports = latest_exports()
         if not exports:
@@ -194,6 +210,8 @@ def main() -> int:
             print("Note: database has no trades yet.")
         if external_trades > 0:
             print("Note: external research records are separate from native trades.")
+        if research_candles > 0 or research_signals > 0:
+            print("Note: signal-only research records are separate from native trades.")
 
     print()
     print("=" * 72)
