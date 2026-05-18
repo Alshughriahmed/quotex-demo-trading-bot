@@ -212,6 +212,44 @@ def convert_plain_rows(rows: list[list[str]], args: argparse.Namespace) -> list[
     return output
 
 
+def row_sort_key(row: dict[str, str]) -> tuple[str, str, int, str]:
+    return (
+        str(row["source_key"]),
+        str(row["asset"]),
+        int(row["timeframe_seconds"]),
+        str(row["candle_time"]),
+    )
+
+
+def normalize_output_rows(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, int]]:
+    non_increasing = 0
+    previous_key: tuple[str, str, int, str] | None = None
+    for row in rows:
+        current_key = row_sort_key(row)
+        if previous_key is not None and current_key <= previous_key:
+            non_increasing += 1
+        previous_key = current_key
+
+    sorted_rows = sorted(rows, key=row_sort_key)
+    seen: set[tuple[str, str, int, str]] = set()
+    deduped: list[dict[str, str]] = []
+    duplicate_timestamps = 0
+    for row in sorted_rows:
+        key = row_sort_key(row)
+        if key in seen:
+            duplicate_timestamps += 1
+            continue
+        seen.add(key)
+        deduped.append(row)
+
+    return deduped, {
+        "input_rows": len(rows),
+        "non_increasing_rows": non_increasing,
+        "duplicate_timestamps_dropped": duplicate_timestamps,
+        "output_rows": len(deduped),
+    }
+
+
 def read_and_convert(path: Path, args: argparse.Namespace) -> list[dict[str, str]]:
     sample = path.read_text(encoding="utf-8-sig", errors="replace")[:4096]
     dialect = sniff_dialect(sample)
@@ -243,8 +281,15 @@ def main() -> int:
     print(f"Timeframe seconds: {args.timeframe}")
     print(f"Source key: {args.source_key}")
 
-    rows = read_and_convert(input_path, args)
-    print(f"Converted rows: {len(rows)}")
+    raw_rows = read_and_convert(input_path, args)
+    rows, normalization = normalize_output_rows(raw_rows)
+    print(f"Converted rows: {normalization['input_rows']}")
+    print(f"Rows after sort/dedupe: {normalization['output_rows']}")
+    if normalization["non_increasing_rows"]:
+        print(f"Input order non-increasing rows detected: {normalization['non_increasing_rows']}")
+        print("Output will be sorted by source/asset/timeframe/candle_time for importer safety.")
+    if normalization["duplicate_timestamps_dropped"]:
+        print(f"Duplicate timestamp rows dropped: {normalization['duplicate_timestamps_dropped']}")
     if rows:
         print(f"Period: {rows[0]['candle_time']} -> {rows[-1]['candle_time']}")
     if not rows:
